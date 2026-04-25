@@ -284,8 +284,9 @@ def cmd_fetch() -> None:
 
 
 def cmd_browse() -> None:
-    from lib.fetch import list_local_schemes, load_favorites, save_favorites, SCHEMES_DIR
-    from lib.colors import load_itermcolors, render_scheme_row
+    from lib.fetch import list_local_schemes, load_favorites, save_favorites
+    from lib.colors import load_itermcolors
+    from lib.browse import run_browser
 
     all_schemes = list_local_schemes()
     if not all_schemes:
@@ -295,7 +296,6 @@ def cmd_browse() -> None:
     favorites = load_favorites()
     fav_orig  = set(favorites)
 
-    # Ask whether to browse all or just favorites
     fav_count = sum(1 for n, _ in all_schemes if n in favorites)
     if fav_count:
         print(f"\n  Browse  [A] all ({len(all_schemes)})  [F] favorites ({fav_count})", end="  ")
@@ -303,81 +303,22 @@ def cmd_browse() -> None:
             mode = input().strip().upper()
         except (EOFError, KeyboardInterrupt):
             mode = "A"
-        if mode == "F":
-            schemes = [(n, p) for n, p in all_schemes if n in favorites]
-            label   = f"Favorites — {len(schemes)} schemes"
-        else:
-            schemes = all_schemes
-            label   = f"All schemes — {len(schemes)}"
+        schemes = [(n, p) for n, p in all_schemes if n in favorites] if mode == "F" else all_schemes
     else:
         schemes = all_schemes
-        label   = f"All schemes — {len(schemes)}"
 
-    print(f"\n  {label}  (★ = bookmarked)")
-    print(f"  {SCHEMES_DIR}")
-    print(f"\n  Swatches: bg · fg · bold · selbg · selfg\n")
-
-    page      = 30
-    offset    = 0
-    redisplay = True
-
-    while offset < len(schemes):
-        end = min(offset + page, len(schemes))
-
-        if redisplay:
-            for i in range(offset, end):
-                name, path = schemes[i]
-                try:
-                    colors = load_itermcolors(path)
-                    row = render_scheme_row(name, colors, bookmarked=(name in favorites))
-                    # row starts with 2 indent spaces; replace with row number
-                    print(f"  {i + 1:3d}  {row[2:]}")
-                except Exception:
-                    print(f"  {i + 1:3d}    {name}  (unreadable)")
-
-        if end >= len(schemes):
-            break
-
-        remaining = len(schemes) - end
-        try:
-            raw = input(
-                f"\n  — {remaining} more —"
-                f"  Enter · b <#> bookmark · q quit: "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            raw = "q"
-
-        if raw == "q":
-            break
-
-        if raw.startswith("b"):
-            toggled = []
-            for tok in raw[1:].split():
-                try:
-                    idx = int(tok) - 1
-                    if 0 <= idx < len(schemes):
-                        n = schemes[idx][0]
-                        if n in favorites:
-                            favorites.discard(n)
-                            toggled.append(f"  ✗ {n}")
-                        else:
-                            favorites.add(n)
-                            toggled.append(f"  ★ {n}")
-                except ValueError:
-                    pass
-            if toggled:
-                print("\n" + "\n".join(toggled))
-            # Redisplay the same page with updated markers
-            redisplay = True
-            print()
-            continue
-
-        offset    = end
-        redisplay = True
-        print()
+    favorites = run_browser(schemes, favorites, load_itermcolors)
 
     if favorites != fav_orig:
         save_favorites(favorites)
+        added   = favorites - fav_orig
+        removed = fav_orig - favorites
+        if added:
+            for n in sorted(added):
+                print(f"  ★ {n}")
+        if removed:
+            for n in sorted(removed):
+                print(f"  ✗ {n}")
         print(f"\n  Bookmarks saved — {len(favorites)} total.\n")
     else:
         print()
