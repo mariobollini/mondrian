@@ -1,229 +1,182 @@
 """
-Interactive palette picker — no API key required.
-
-Shows the auto-derived directions, lets the user pick one, then optionally
-override individual hex values. For freeform color tweaking, just describe
-what you want to change in Claude Code and re-run `mondrian configure`.
+Phase-by-phase interactive configure flow.
 """
 
 import sys
-from .colors import (
-    derive_palette, preview_all_directions, preview_palette,
-    hex_to_srgb, srgb_to_hex,
-    load_itermcolors,
-)
-from .fetch import SCHEMES_DIR, list_local_schemes, load_favorites
+from .colors import srgb_to_hex, hex_to_srgb, srgb_to_hsl, derive_state_colors, derive_palette
+from .fetch import list_local_schemes, load_favorites
 
 
 # ---------------------------------------------------------------------------
-# Scheme list helpers
+# Scheme aggregation
 # ---------------------------------------------------------------------------
 
-def _get_all_schemes() -> tuple[list[tuple[str, object]], set[str]]:
+def _get_all_schemes() -> tuple[list, set]:
     """
-    Return (schemes, favorites) where schemes is [(name, path_or_colors_dict), ...].
-
-    Sources (in priority order, deduplicated by name):
-      1. ~/.mondrian/schemes/*.itermcolors  (path strings)
-      2. iTerm2 Custom Color Presets from plist  (pre-loaded dicts)
-
-    favorites-first sort: starred items float to the top, then alphabetical.
+    Return (schemes, favorites).
+    schemes = [(name, path_or_colors_dict), ...], favorites-first then alpha.
+    Sources: ~/.mondrian/schemes/ + iTerm2 Custom Color Presets.
     """
     from .iterm import list_color_presets
 
-    favorites = load_favorites()
-
-    local   = list_local_schemes()               # [(name, path_str), ...]
-    presets = list_color_presets()               # [(name, colors_dict), ...]
-
-    local_names = {n for n, _ in local}
-    combined = local + [(n, d) for n, d in presets if n not in local_names]
+    favorites    = load_favorites()
+    local        = list_local_schemes()               # [(name, path_str)]
+    presets      = list_color_presets()               # [(name, colors_dict)]
+    local_names  = {n for n, _ in local}
+    combined     = local + [(n, d) for n, d in presets if n not in local_names]
 
     def sort_key(item):
-        name = item[0]
-        return (0 if name in favorites else 1, name.lower())
+        return (0 if item[0] in favorites else 1, item[0].lower())
 
     return sorted(combined, key=sort_key), favorites
 
 
-def _pick_scheme_via_browser(prompt: str) -> dict | None:
-    """
-    Open the full-screen browser in select mode. Returns the selected colors
-    dict or None if the user cancelled. Favorites are shown first.
-    """
-    from .browse import run_browser
+# ---------------------------------------------------------------------------
+# Transparency prompt (moved here from mondrian.py)
+# ---------------------------------------------------------------------------
 
+def _pick_transparency(query_fn, required: bool = False) -> dict:
+    """Ask whether to enable transparency fading. Returns config dict or {}."""
+    print()
+    if required:
+        print("  Processing and normal colors are the same — transparency is required for a visible signal.")
+    else:
+        try:
+            raw = input("  Add transparency fade (window fades while Claude is working)? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return {}
+        if raw != "y":
+            return {}
+
+    current = query_fn()
+    if current is None:
+        print("  (Could not read current transparency via AppleScript — defaulting to 0)")
+        current = 0.0
+
+    suggested = round(min(current + 0.35, 0.85), 2)
+    print(f"  Current transparency : {current:.0%}  (0% = opaque, 100% = clear)")
+    try:
+        raw = input(f"  Processing transparency [{suggested:.0%}]: ").strip().rstrip("%")
+    except (EOFError, KeyboardInterrupt):
+        return {}
+
+    if raw:
+        try:
+            v = float(raw)
+            active_alpha = v / 100 if v > 1 else v
+        except ValueError:
+            print("  Invalid value, skipping transparency.")
+            return {}
+    else:
+        active_alpha = suggested
+
+    active_alpha = max(0.0, min(1.0, active_alpha))
+    print(f"  Normal: {current:.0%} → Processing: {active_alpha:.0%}")
+    return {"waiting": round(current, 3), "active": round(active_alpha, 3)}
+
+
+# ---------------------------------------------------------------------------
+# Main configure flow
+# ---------------------------------------------------------------------------
+
+def configure_phases(profile: dict) -> "tuple | None":
+    """
+    Phase-by-phase interactive configuration.
+    Returns (waiting_colors, active_colors, blocked_colors, transparency_config)
+    or None if the user cancels at the review step.
+    All *_colors are {bg, fg, bold, selbg, selfg} hex dicts.
+    """
+    from .picker import pick_state_color, text_swatches, print_review_and_confirm
+    from .iterm import query_terminal_transparency
+
+    dark_mode = srgb_to_hsl(*profile["bg"])[2] < 0.5
     schemes, favorites = _get_all_schemes()
-    if not schemes:
-        return None
 
-    return run_browser(
-        schemes, favorites, load_itermcolors,
-        select_mode=True, prompt=prompt,
+    def section(title: str, desc: str) -> None:
+        pad = max(1, 58 - len(title))
+        print(f"\n  ── {title} {'─' * pad}")
+        print(f"  {desc}\n")
+
+    def auto_active(wc: dict) -> dict:
+        pal = derive_palette(hex_to_srgb(wc["bg"]))
+        return derive_state_colors(
+            pal["B"]["active"],
+            hex_to_srgb(wc["fg"]),
+            hex_to_srgb(wc["selbg"]),
+        )
+
+    def auto_blocked(wc: dict) -> dict:
+        pal = derive_palette(hex_to_srgb(wc["bg"]))
+        return derive_state_colors(
+            pal["B"]["blocked"],
+            hex_to_srgb(wc["fg"]),
+            hex_to_srgb(wc["selbg"]),
+        )
+
+    # ── Phase 1: Normal / Waiting ────────────────────────────────────────
+    section("Normal", "Your everyday terminal. Mondrian won't change this color.")
+
+    waiting_colors: dict = {
+        "bg":    srgb_to_hex(*profile["bg"]),
+        "fg":    srgb_to_hex(*profile["fg"]),
+        "bold":  srgb_to_hex(*profile["fg"]),
+        "selbg": srgb_to_hex(*profile["selbg"]),
+        "selfg": srgb_to_hex(*profile["selfg"]),
+    }
+
+    print(f"  {text_swatches(waiting_colors)}  {waiting_colors['bg']}\n")
+
+    try:
+        raw = input("  Customize? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+
+    if raw == "y":
+        picked = pick_state_color(
+            "Normal", schemes, favorites, waiting_colors, dark_mode,
+        )
+        if picked:
+            waiting_colors = picked
+
+    # ── Phase 2: Processing / Active ────────────────────────────────────
+    section(
+        "Processing",
+        "Fires the moment you press Enter. Stays on while Claude is thinking.",
     )
 
+    active_colors = pick_state_color(
+        "Processing", schemes, favorites, waiting_colors, dark_mode,
+        hint="blue [6]",
+    )
+    if active_colors is None:
+        active_colors = auto_active(waiting_colors)
+        print(f"  Auto-derived  →  {active_colors['bg']}\n")
 
-# ---------------------------------------------------------------------------
-# Shared prompt helpers
-# ---------------------------------------------------------------------------
+    # ── Phase 3: Blocked ─────────────────────────────────────────────────
+    section(
+        "Blocked",
+        "Fires when Claude needs your approval to use a tool or read a file.",
+    )
 
-def _prompt_hex(label: str, current: tuple) -> tuple:
-    """Ask the user for a hex override. Empty input keeps the current value."""
-    current_hex = srgb_to_hex(*current)
-    try:
-        raw = input(f"  {label} [{current_hex}]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return current
-    if not raw:
-        return current
-    raw = raw if raw.startswith("#") else f"#{raw}"
-    if len(raw) != 7:
-        print(f"  Invalid hex, keeping {current_hex}")
-        return current
-    try:
-        return hex_to_srgb(raw)
-    except ValueError:
-        print(f"  Invalid hex, keeping {current_hex}")
-        return current
+    blocked_colors = pick_state_color(
+        "Blocked", schemes, favorites, waiting_colors, dark_mode,
+        hint="red [1]",
+    )
+    if blocked_colors is None:
+        blocked_colors = auto_blocked(waiting_colors)
+        print(f"  Auto-derived  →  {blocked_colors['bg']}\n")
 
+    # ── Phase 4: Transparency ────────────────────────────────────────────
+    transparency_required = waiting_colors["bg"] == active_colors["bg"]
+    transparency_config   = _pick_transparency(
+        query_terminal_transparency, required=transparency_required,
+    )
 
-# ---------------------------------------------------------------------------
-# Custom .itermcolors picker (Direction E)
-# ---------------------------------------------------------------------------
+    # ── Review + confirm ─────────────────────────────────────────────────
+    if not print_review_and_confirm(
+        waiting_colors, active_colors, blocked_colors, transparency_config
+    ):
+        print("  Cancelled.\n")
+        return None
 
-def pick_custom_interactively() -> tuple[dict, dict, dict]:
-    """
-    Guide the user through selecting three schemes via the browse TUI.
-    Returns (waiting_colors, active_colors, blocked_colors), each a
-    {bg, fg, bold, selbg, selfg} hex dict.
-    """
-    schemes, _ = _get_all_schemes()
-    if not schemes:
-        print("\n  No schemes found. Run: mondrian fetch --all\n")
-        sys.exit(1)
-
-    print(f"\n  {len(schemes)} schemes available — use ↑↓ to navigate, Enter to select.\n")
-
-    def pick(label: str) -> dict:
-        print(f"  Select: {label}")
-        colors = _pick_scheme_via_browser(label)
-        if colors is None:
-            print("  Cancelled.")
-            sys.exit(0)
-        return colors
-
-    waiting_colors = pick("Waiting  (your normal state) ")
-    active_colors  = pick("Active   (Claude is working) ")
-    blocked_colors = pick("Blocked  (Claude needs input)")
-
-    print(preview_palette(
-        "  Custom palette",
-        hex_to_srgb(waiting_colors["bg"]),
-        hex_to_srgb(active_colors["bg"]),
-        hex_to_srgb(blocked_colors["bg"]),
-        fg=hex_to_srgb(waiting_colors["fg"]),
-    ))
-    print()
-
-    return waiting_colors, active_colors, blocked_colors
-
-
-# ---------------------------------------------------------------------------
-# Main direction picker
-# ---------------------------------------------------------------------------
-
-def pick_direction_interactively(
-    bg: tuple,
-    fg: tuple,
-) -> tuple:
-    """
-    Optionally rederive palette from an iTerm2 scheme, then show A–D + E.
-
-    Returns a 6-tuple:
-      (waiting_rgb, active_rgb, blocked_rgb, label, custom_colors, base_overrides)
-
-    For A–D from terminal:  custom_colors=None, base_overrides=None
-    For A–D from scheme:    custom_colors=None, base_overrides={"fg","selbg","selfg"} hex strs
-    For E (custom):         waiting/active/blocked=None, custom_colors={...}, base_overrides=None
-    """
-    # -----------------------------------------------------------------------
-    # Step 0: Ask whether to base palette on current terminal or a scheme
-    # -----------------------------------------------------------------------
-    schemes, _ = _get_all_schemes()
-    base_overrides = None
-
-    if schemes:
-        print()
-        try:
-            raw = input(
-                "  Derive palette from  [1] current terminal  [2] iTerm2 scheme: "
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            raw = "1"
-        if raw == "2":
-            print("  Pick the scheme whose background you want to base colors on.\n")
-            base_scheme = _pick_scheme_via_browser("Base scheme")
-            if base_scheme:
-                bg = hex_to_srgb(base_scheme["bg"])
-                fg = hex_to_srgb(base_scheme["fg"])
-                base_overrides = {
-                    "fg":    base_scheme["fg"],
-                    "selbg": base_scheme["selbg"],
-                    "selfg": base_scheme["selfg"],
-                }
-                print(
-                    f"  Base: bg={base_scheme['bg']}  fg={base_scheme['fg']}\n"
-                )
-            else:
-                print("  Cancelled — using current terminal colors.\n")
-
-    # -----------------------------------------------------------------------
-    # Step 1: Derive and show directions A–D
-    # -----------------------------------------------------------------------
-    directions = derive_palette(bg)
-
-    print("\n  Derived palette directions:\n")
-    print(preview_all_directions(directions, fg=fg))
-    print()
-    print("  [E] Load custom schemes (waiting / active / blocked separately)\n")
-    print("  Tip: not quite right? Describe the change in Claude Code and re-run configure.\n")
-
-    valid = set(directions.keys()) | {"E"}
-    choice = None
-    while choice not in valid:
-        try:
-            raw = input("  Pick a direction [A/B/C/D/E], or Enter for A: ").strip().upper()
-        except (EOFError, KeyboardInterrupt):
-            raw = ""
-        choice = raw if raw in valid else "A"
-
-    if choice == "E":
-        w, a, b = pick_custom_interactively()
-        return None, None, None, "custom", {"waiting": w, "active": a, "blocked": b}, None
-
-    d = directions[choice]
-    waiting = d["waiting"]
-    active  = d["active"]
-    blocked = d["blocked"]
-    label   = d["label"]
-
-    print(preview_palette(f"  [{choice}] {label}", waiting, active, blocked, fg=fg))
-    if choice == "D":
-        print("  (Waiting and Active share the same background — opacity is the signal.)")
-    print()
-
-    try:
-        want_override = input("  Override any colors? [y/N]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        want_override = ""
-
-    if want_override == "y":
-        print("  Enter hex values to override (press Enter to keep current):\n")
-        if choice != "D":
-            active = _prompt_hex("Active ", active)
-        blocked = _prompt_hex("Blocked", blocked)
-        print()
-        print(preview_palette("  Final palette", waiting, active, blocked, fg=fg))
-        print()
-
-    return waiting, active, blocked, label, None, base_overrides
+    return waiting_colors, active_colors, blocked_colors, transparency_config

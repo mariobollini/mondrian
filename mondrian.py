@@ -2,23 +2,29 @@
 """
 mondrian — iTerm2 session-state colorizer for Claude Code
 
-Commands:
-  configure   Auto-derive palette from your terminal, then apply
-  apply       Re-apply the saved palette without reconfiguring
-  status      Show current install state
-  fetch       Download schemes from iTerm2-Color-Schemes  (fetch --all for everything)
-  browse      Browse your local scheme library with color swatches
-  reset       Restore terminal colors and remove all mondrian config
-  uninstall   Alias for reset
+Run without arguments for an interactive menu, or pass a command directly:
+
+  configure   Set up color states (normal / processing / blocked)
+  browse      Explore schemes, manage bookmarks, fetch from library
+  status      Show current installation state
+  reset       Restore terminal and remove all mondrian config
+
+Advanced:
+  apply       Re-apply saved config (after editing ~/.mondrian.json)
+  fetch       Download a named scheme:  mondrian fetch Dracula
+              Download all schemes:     mondrian fetch --all
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
 CONFIG_PATH = Path("~/.mondrian.json").expanduser()
 
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
 
 def _load_config() -> dict:
     if CONFIG_PATH.exists():
@@ -33,227 +39,46 @@ def _save_config(data: dict) -> None:
         f.write("\n")
 
 
-def _pick_transparency(query_fn, required: bool = False) -> dict:
-    """Ask whether to enable transparency fading; return config dict or {}."""
-    print()
-    if required:
-        print("  Direction D has no color delta — transparency fade is required.")
-    else:
+# ---------------------------------------------------------------------------
+# Done summary
+# ---------------------------------------------------------------------------
+
+def _print_done_summary(dp_path: Path, shell_rc: "Path | None") -> None:
+    home = Path.home()
+
+    def rel(p):
         try:
-            raw = input("  Add transparency fade (terminal fades when Claude is working)? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return {}
-        if raw != "y":
-            return {}
-
-    current = query_fn()
-    if current is None:
-        print("  (Could not read current transparency via AppleScript — defaulting to 0)")
-        current = 0.0
-
-    suggested = round(min(current + 0.35, 0.85), 2)
-    print(f"  Current transparency : {current:.0%}  (0% = opaque, 100% = clear)")
-    try:
-        raw = input(f"  Active (working) transparency [{suggested:.0%}]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return {}
-
-    if raw:
-        raw = raw.rstrip("%")
-        try:
-            active_alpha = float(raw) / 100 if float(raw) > 1 else float(raw)
+            return "~/" + str(Path(p).relative_to(home))
         except ValueError:
-            print("  Invalid value, skipping transparency.")
-            return {}
-    else:
-        active_alpha = suggested
+            return str(p)
 
-    active_alpha = max(0.0, min(1.0, active_alpha))
-    print(f"  Waiting: {current:.0%} opacity → Active: {active_alpha:.0%} opacity")
-    return {"waiting": round(current, 3), "active": round(active_alpha, 3)}
-
-
-def cmd_configure() -> None:
-    from lib.iterm import read_profile_colors, write_dynamic_profiles, query_terminal_transparency
-    from lib.hooks import install_hooks
-    from lib.chat import pick_direction_interactively
-    from lib.colors import srgb_to_hex, hex_to_srgb
-
-    print("\n  mondrian configure\n")
-
-    profile = read_profile_colors()
-    print(f"  Detected profile : {profile['name']}")
-    print(f"  Background       : {srgb_to_hex(*profile['bg'])}")
-    print(f"  Foreground       : {srgb_to_hex(*profile['fg'])}")
-
-    waiting, active, blocked, label, custom_colors, base_overrides = pick_direction_interactively(
-        bg=profile["bg"],
-        fg=profile["fg"],
-    )
-
-    if custom_colors:
-        w_hex = custom_colors["waiting"]["bg"]
-        a_hex = custom_colors["active"]["bg"]
-        b_hex = custom_colors["blocked"]["bg"]
-        transparency_required = (w_hex == a_hex)
-    else:
-        transparency_required = (active == waiting)
-
-    transparency_config = _pick_transparency(query_terminal_transparency, required=transparency_required)
-
-    # Build config and resolve the rgb tuples needed for Dynamic Profiles
-    if custom_colors:
-        config_data = {
-            "source_profile": {"guid": profile["guid"], "name": profile["name"]},
-            "palette": {
-                "direction": "custom",
-                "waiting": w_hex,
-                "active":  a_hex,
-                "blocked": b_hex,
-            },
-            "waiting_colors": custom_colors["waiting"],
-            "active_colors":  custom_colors["active"],
-            "blocked_colors": custom_colors["blocked"],
-            "fg":    custom_colors["waiting"]["fg"],
-            "selbg": custom_colors["waiting"]["selbg"],
-            "selfg": custom_colors["waiting"]["selfg"],
-        }
-        dp_waiting = hex_to_srgb(w_hex)
-        dp_active  = hex_to_srgb(a_hex)
-        dp_blocked = hex_to_srgb(b_hex)
-        dp_fg      = hex_to_srgb(custom_colors["waiting"]["fg"])
-    else:
-        # When the user based A-D derivation on an iTerm2 scheme, use that
-        # scheme's fg/selbg/selfg rather than the detected profile values.
-        fg_hex    = base_overrides["fg"]    if base_overrides else srgb_to_hex(*profile["fg"])
-        selbg_hex = base_overrides["selbg"] if base_overrides else srgb_to_hex(*profile["selbg"])
-        selfg_hex = base_overrides["selfg"] if base_overrides else srgb_to_hex(*profile["selfg"])
-        config_data = {
-            "source_profile": {"guid": profile["guid"], "name": profile["name"]},
-            "palette": {
-                "direction": label,
-                "waiting": srgb_to_hex(*waiting),
-                "active":  srgb_to_hex(*active),
-                "blocked": srgb_to_hex(*blocked),
-            },
-            "fg":    fg_hex,
-            "selbg": selbg_hex,
-            "selfg": selfg_hex,
-        }
-        dp_waiting, dp_active, dp_blocked = waiting, active, blocked
-        dp_fg = hex_to_srgb(fg_hex)
-
-    if transparency_config:
-        config_data["transparency"] = transparency_config
-
-    # Optional: auto-expire the blocked/red state after N seconds
+    print("\n  ── Applied ───────────────────────────────────────────────────────")
     print()
-    try:
-        raw = input(
-            "  Auto-clear blocked/red after N seconds? [e.g. 90, or Enter to skip]: "
-        ).strip()
-    except (EOFError, KeyboardInterrupt):
-        raw = ""
-    if raw:
-        try:
-            config_data["blocked_expire"] = max(10, int(raw))
-            print(f"  Blocked state will auto-clear after {config_data['blocked_expire']}s.")
-        except ValueError:
-            pass
+    rows = [
+        ("~/.claude/settings.json",         "hooks  (Submit · PreTool · Stop · Notification)"),
+        ("~/.mondrian.json",                 "palette config"),
+        (rel(dp_path),                       "iTerm2 Dynamic Profiles  (Waiting · Active · Blocked)"),
+        ("~/.mondrian/restore_seq.sh",       "focus-restore sequence"),
+    ]
+    if shell_rc:
+        rows.append((rel(shell_rc), "shell precmd hook"))
 
-    # Persist config first so install_hooks reads the correct palette
-    _save_config(config_data)
-
-    # Write Dynamic Profiles
-    path = write_dynamic_profiles(
-        parent_guid=profile["guid"],
-        waiting=dp_waiting,
-        active=dp_active,
-        blocked=dp_blocked,
-        fg=dp_fg,
-    )
-    print(f"  Dynamic Profiles → {path}")
-
-    # Patch hooks (reads from the config we just saved)
-    install_hooks()
-    print("  Hooks            → ~/.claude/settings.json")
-
-    # Optional shell focus-restore hook
-    from lib.shell import install_shell_hook, shell_hook_installed
-    print()
-    if not shell_hook_installed():
-        try:
-            raw = input(
-                "  Clear red on focus (adds precmd hook to shell rc)? [y/N]: "
-            ).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            raw = ""
-        if raw == "y":
-            rc = install_shell_hook()
-            print(f"  Shell hook       → {rc}")
-            print(f"  Run: source {rc}  (or restart shell)")
-    else:
-        print("  Shell focus hook already installed.")
-
-    print("\n  Done. Open a new iTerm2 session to see it in action.\n")
-
-
-def cmd_apply() -> None:
-    from lib.iterm import read_profile_colors, write_dynamic_profiles
-    from lib.hooks import install_hooks
-    from lib.colors import hex_to_srgb, srgb_to_hex
-
-    config = _load_config()
-    if not config:
-        print("  No saved config. Run: mondrian configure", file=sys.stderr)
-        sys.exit(1)
-
-    palette = config["palette"]
-    profile = read_profile_colors()
-
-    waiting = hex_to_srgb(palette["waiting"])
-    active  = hex_to_srgb(palette["active"])
-    blocked = hex_to_srgb(palette["blocked"])
-    fg      = hex_to_srgb(config["fg"])
-
-    path = write_dynamic_profiles(
-        parent_guid=config["source_profile"]["guid"],
-        waiting=waiting,
-        active=active,
-        blocked=blocked,
-        fg=fg,
-    )
-    install_hooks()
-    print(f"  Applied palette to {path} and hooks.")
-
-
-def cmd_status() -> None:
-    from lib.iterm import PROFILE_FILE
-    from lib.hooks import hooks_installed
-    from lib.colors import srgb_to_hex
-
-    config = _load_config()
-    print()
-    print("  mondrian status")
-    print()
-
-    if config:
-        p = config["palette"]
-        print(f"  Palette direction : {p.get('direction', '—')}")
-        print(f"  Waiting  : {p['waiting']}")
-        print(f"  Active   : {p['active']}")
-        print(f"  Blocked  : {p['blocked']}")
-    else:
-        print("  No saved config. Run: mondrian configure")
+    col = max(len(r[0]) for r in rows) + 2
+    for path, desc in rows:
+        print(f"  {path:<{col}}  {desc}")
 
     print()
-    print(f"  Dynamic Profiles : {'✓' if PROFILE_FILE.exists() else '✗'} {PROFILE_FILE}")
-    print(f"  Hooks installed  : {'✓' if hooks_installed() else '✗'}")
+    print("  To undo everything:  mondrian reset")
+    print()
+    print("  Open a new iTerm2 tab or window to activate.")
     print()
 
+
+# ---------------------------------------------------------------------------
+# Restore colors to terminal immediately (used by reset)
+# ---------------------------------------------------------------------------
 
 def _restore_terminal_now(config: dict) -> None:
-    """Send the waiting-state colors and transparency to the live terminal immediately."""
     import subprocess
 
     if "waiting_colors" in config:
@@ -285,82 +110,158 @@ def _restore_terminal_now(config: dict) -> None:
     if waiting_alpha is not None:
         subprocess.run(
             ["osascript", "-e",
-             f"tell application \"iTerm2\" to tell current session of "
-             f"current window to set transparency to {waiting_alpha:.3f}"],
+             f'tell application "iTerm2" to tell current session of '
+             f'current window to set transparency to {waiting_alpha:.3f}'],
             capture_output=True,
         )
 
 
-def cmd_fetch() -> None:
-    from lib.fetch import fetch_scheme, fetch_all_schemes, SCHEMES_DIR
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
 
-    args = sys.argv[2:]
-    if not args or args[0] in ("-h", "--help"):
-        print("\n  Usage: mondrian fetch <name>")
-        print("         mondrian fetch --all\n")
+def cmd_configure() -> None:
+    from lib.iterm import read_profile_colors, write_dynamic_profiles
+    from lib.hooks import install_hooks
+    from lib.chat import configure_phases
+    from lib.colors import srgb_to_hex, hex_to_srgb
+    from lib.shell import install_shell_hook, shell_hook_installed
+
+    print("\n  mondrian configure")
+    print("  (Run  mondrian reset  at any time to undo everything.)\n")
+
+    profile = read_profile_colors()
+    print(f"  Profile    : {profile['name']}")
+    print(f"  Background : {srgb_to_hex(*profile['bg'])}")
+    print(f"  Foreground : {srgb_to_hex(*profile['fg'])}")
+
+    result = configure_phases(profile)
+    if result is None:
         return
+    waiting_colors, active_colors, blocked_colors, transparency_config = result
 
-    if args[0] == "--all":
-        print(f"\n  Fetching all schemes from iTerm2-Color-Schemes …\n")
-
-        def progress(i, total, name):
-            bar = "█" * round(20 * i / total)
-            print(f"  [{bar:<20}] {i}/{total}  {name:<35}", end="\r", flush=True)
-
-        ok, total = fetch_all_schemes(on_progress=progress)
-        print(f"\n\n  Done. {ok}/{total} schemes saved to {SCHEMES_DIR}\n")
-    else:
-        name = " ".join(args)  # allow multi-word names without quoting
-        print(f"\n  Fetching '{name}' …")
+    # Optional: auto-clear blocked state after N seconds
+    print()
+    try:
+        raw = input(
+            "  Auto-clear blocked/red after N seconds? [e.g. 90, or Enter to skip]: "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+    blocked_expire = 0
+    if raw:
         try:
-            path = fetch_scheme(name)
-            print(f"  Saved → {path}\n")
-        except Exception as e:
-            print(f"  Failed: {e}\n", file=sys.stderr)
-            sys.exit(1)
+            blocked_expire = max(10, int(raw))
+            print(f"  Blocked state will auto-clear after {blocked_expire}s.")
+        except ValueError:
+            pass
 
+    # Build and save config
+    config_data: dict = {
+        "source_profile": {"guid": profile["guid"], "name": profile["name"]},
+        "palette": {
+            "direction": "interactive",
+            "waiting": waiting_colors["bg"],
+            "active":  active_colors["bg"],
+            "blocked": blocked_colors["bg"],
+        },
+        "waiting_colors": waiting_colors,
+        "active_colors":  active_colors,
+        "blocked_colors": blocked_colors,
+        "fg":    waiting_colors["fg"],
+        "selbg": waiting_colors["selbg"],
+        "selfg": waiting_colors["selfg"],
+    }
+    if transparency_config:
+        config_data["transparency"] = transparency_config
+    if blocked_expire:
+        config_data["blocked_expire"] = blocked_expire
 
-def cmd_browse() -> None:
-    from lib.chat import _get_all_schemes
-    from lib.colors import load_itermcolors
-    from lib.browse import run_browser
-    from lib.fetch import save_favorites
+    _save_config(config_data)
 
-    all_schemes, favorites = _get_all_schemes()
-    if not all_schemes:
-        print(f"\n  Library is empty. Run: mondrian fetch --all\n")
-        return
+    # Dynamic Profiles
+    dp_path = write_dynamic_profiles(
+        parent_guid=profile["guid"],
+        waiting=hex_to_srgb(waiting_colors["bg"]),
+        active= hex_to_srgb(active_colors["bg"]),
+        blocked=hex_to_srgb(blocked_colors["bg"]),
+        fg=    hex_to_srgb(waiting_colors["fg"]),
+    )
 
-    fav_orig  = set(favorites)
-    fav_count = sum(1 for n, _ in all_schemes if n in favorites)
+    # Hooks
+    install_hooks()
 
-    if fav_count:
-        print(f"\n  Browse  [A] all ({len(all_schemes)})  [F] favorites ({fav_count})", end="  ")
+    # Shell focus-restore hook
+    shell_rc = None
+    print()
+    if not shell_hook_installed():
         try:
-            mode = input().strip().upper()
+            raw = input(
+                "  Clear red on terminal focus (adds precmd hook to shell rc)? [y/N]: "
+            ).strip().lower()
         except (EOFError, KeyboardInterrupt):
-            mode = "A"
-        fav_mode = mode == "F"
-        schemes  = [(n, p) for n, p in all_schemes if n in favorites] if fav_mode else all_schemes
+            raw = ""
+        if raw == "y":
+            shell_rc = install_shell_hook()
     else:
-        fav_mode = False
-        schemes  = all_schemes
+        print("  Shell focus hook already installed.")
 
-    favorites = run_browser(schemes, favorites, load_itermcolors, live_filter=fav_mode)
+    _print_done_summary(dp_path, shell_rc)
 
-    if favorites != fav_orig:
-        save_favorites(favorites)
-        added   = favorites - fav_orig
-        removed = fav_orig - favorites
-        if added:
-            for n in sorted(added):
-                print(f"  ★ {n}")
-        if removed:
-            for n in sorted(removed):
-                print(f"  ✗ {n}")
-        print(f"\n  Bookmarks saved — {len(favorites)} total.\n")
+
+def cmd_apply() -> None:
+    from lib.iterm import read_profile_colors, write_dynamic_profiles
+    from lib.hooks import install_hooks
+    from lib.colors import hex_to_srgb
+
+    config = _load_config()
+    if not config:
+        print("  No saved config. Run: mondrian configure", file=sys.stderr)
+        sys.exit(1)
+
+    palette = config["palette"]
+    profile = read_profile_colors()
+
+    waiting = hex_to_srgb(palette["waiting"])
+    active  = hex_to_srgb(palette["active"])
+    blocked = hex_to_srgb(palette["blocked"])
+    fg      = hex_to_srgb(config["fg"])
+
+    path = write_dynamic_profiles(
+        parent_guid=config["source_profile"]["guid"],
+        waiting=waiting, active=active, blocked=blocked, fg=fg,
+    )
+    install_hooks()
+    print(f"  Applied palette to {path} and hooks.")
+
+
+def cmd_status() -> None:
+    from lib.iterm import PROFILE_FILE
+    from lib.hooks import hooks_installed
+    from lib.shell import shell_hook_installed
+
+    config = _load_config()
+    print()
+    print("  mondrian status")
+    print()
+
+    if config:
+        p = config["palette"]
+        print(f"  Direction  : {p.get('direction', '—')}")
+        print(f"  Normal     : {p['waiting']}")
+        print(f"  Processing : {p['active']}")
+        print(f"  Blocked    : {p['blocked']}")
+        tr = config.get("transparency") or {}
+        if tr:
+            print(f"  Fade       : {tr.get('waiting',0):.0%} → {tr.get('active',0):.0%} while processing")
     else:
-        print()
+        print("  No saved config. Run: mondrian configure")
+
+    print()
+    print(f"  Dynamic Profiles : {'✓' if PROFILE_FILE.exists() else '✗'}  {PROFILE_FILE}")
+    print(f"  Hooks installed  : {'✓' if hooks_installed()       else '✗'}")
+    print(f"  Shell hook       : {'✓' if shell_hook_installed()  else '✗'}")
+    print()
 
 
 def cmd_reset() -> None:
@@ -369,7 +270,6 @@ def cmd_reset() -> None:
     from lib.shell import remove_shell_hook
 
     config = _load_config()
-
     if config:
         _restore_terminal_now(config)
         print("  Colors restored.")
@@ -397,6 +297,135 @@ def cmd_uninstall() -> None:
     cmd_reset()
 
 
+def cmd_fetch() -> None:
+    from lib.fetch import fetch_scheme, fetch_all_schemes, SCHEMES_DIR
+
+    args = sys.argv[2:]
+    if not args or args[0] in ("-h", "--help"):
+        print("\n  Usage: mondrian fetch <name>")
+        print("         mondrian fetch --all\n")
+        return
+
+    if args[0] == "--all":
+        print(f"\n  Fetching all schemes from iTerm2-Color-Schemes …\n")
+
+        def progress(i, total, name):
+            bar = "█" * round(20 * i / total)
+            print(f"  [{bar:<20}] {i}/{total}  {name:<35}", end="\r", flush=True)
+
+        ok, total = fetch_all_schemes(on_progress=progress)
+        print(f"\n\n  Done. {ok}/{total} schemes saved to {SCHEMES_DIR}\n")
+    else:
+        name = " ".join(args)
+        print(f"\n  Fetching '{name}' …")
+        try:
+            path = fetch_scheme(name)
+            print(f"  Saved → {path}\n")
+        except Exception as e:
+            print(f"  Failed: {e}\n", file=sys.stderr)
+            sys.exit(1)
+
+
+def _fetch_submenu() -> None:
+    from lib.fetch import fetch_scheme, fetch_all_schemes, list_local_schemes, SCHEMES_DIR
+
+    local_count = len(list_local_schemes())
+    print(f"\n  Fetch from mbadolato/iTerm2-Color-Schemes")
+    print(f"  Library: {local_count} schemes in {SCHEMES_DIR}\n")
+    print("  [1] Search by name  (e.g. Dracula, Tokyo Night)")
+    print("  [2] Fetch all       (~500 schemes, ~3 MB)")
+    print("  [q] Back\n")
+
+    try:
+        raw = input("  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if raw == "1":
+        try:
+            name = input("  Name: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not name:
+            return
+        print(f"  Fetching '{name}' …")
+        try:
+            path = fetch_scheme(name)
+            print(f"  Saved → {path}\n")
+        except Exception as e:
+            print(f"  Failed: {e}\n", file=sys.stderr)
+
+    elif raw == "2":
+        print("\n  Fetching all schemes …\n")
+
+        def progress(i, total, name):
+            bar = "█" * round(20 * i / total)
+            print(f"  [{bar:<20}] {i}/{total}  {name:<35}", end="\r", flush=True)
+
+        ok, total = fetch_all_schemes(on_progress=progress)
+        print(f"\n\n  Done. {ok}/{total} schemes saved to {SCHEMES_DIR}\n")
+
+
+def cmd_browse() -> None:
+    from lib.chat import _get_all_schemes
+    from lib.colors import load_itermcolors
+    from lib.browse import run_browser
+    from lib.fetch import save_favorites, list_local_schemes
+
+    while True:
+        all_schemes, favorites = _get_all_schemes()
+        lib_count  = len(list_local_schemes())
+        fav_count  = sum(1 for n, _ in all_schemes if n in favorites)
+        plist_count = len(all_schemes) - lib_count
+
+        parts = [f"{lib_count} library"]
+        if plist_count:
+            parts.append(f"{plist_count} from iTerm2 prefs")
+        total_label = " + ".join(parts)
+
+        print(f"\n  Browse  {total_label}  ·  {fav_count} bookmarked\n")
+        print("  [A] All schemes")
+        print("  [F] Favorites")
+        print("  [+] Fetch more from iTerm2-Color-Schemes")
+        print("  [q] Quit\n")
+
+        try:
+            mode = input("  > ").strip().upper()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if mode in ("Q", ""):
+            return
+
+        if mode == "+":
+            _fetch_submenu()
+            continue
+
+        fav_mode = mode == "F"
+        fav_orig = set(favorites)
+        schemes  = [(n, p) for n, p in all_schemes if n in favorites] if fav_mode else all_schemes
+
+        if not schemes:
+            print("\n  No schemes yet. Choose [+] to fetch some.\n")
+            continue
+
+        new_favorites = run_browser(schemes, favorites, load_itermcolors, live_filter=fav_mode)
+
+        if new_favorites != fav_orig:
+            save_favorites(new_favorites)
+            added   = new_favorites - fav_orig
+            removed = fav_orig - new_favorites
+            for n in sorted(added):   print(f"  ★ {n}")
+            for n in sorted(removed): print(f"  ✗ {n}")
+            print(f"  {len(new_favorites)} bookmarks saved.")
+        # Loop back to menu after each browse session
+
+
+# ---------------------------------------------------------------------------
+# Main menu + entry point
+# ---------------------------------------------------------------------------
+
 COMMANDS = {
     "configure": cmd_configure,
     "apply":     cmd_apply,
@@ -408,11 +437,34 @@ COMMANDS = {
 }
 
 
+def _show_menu() -> None:
+    config = _load_config()
+    state  = "configured ✓" if config else "not configured"
+    print(f"\n  mondrian  —  iTerm2 colorizer for Claude Code  ({state})\n")
+    print("  [1] Configure    set up color states for Claude Code")
+    print("  [2] Browse       explore schemes, manage bookmarks")
+    print("  [3] Status       show current setup")
+    print("  [4] Reset        remove all mondrian config")
+    print()
+    try:
+        raw = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    {"1": cmd_configure, "2": cmd_browse, "3": cmd_status, "4": cmd_reset}.get(raw, lambda: None)()
+
+
 def main() -> None:
     args = sys.argv[1:]
-    if not args or args[0] in ("-h", "--help"):
+
+    if not args:
+        _show_menu()
+        return
+
+    if args[0] in ("-h", "--help"):
         print(__doc__)
-        sys.exit(0)
+        return
 
     cmd = args[0]
     if cmd not in COMMANDS:
