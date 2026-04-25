@@ -287,15 +287,33 @@ def cmd_browse() -> None:
     from lib.fetch import list_local_schemes, load_favorites, save_favorites, SCHEMES_DIR
     from lib.colors import load_itermcolors, render_scheme_row
 
-    schemes = list_local_schemes()
-    if not schemes:
+    all_schemes = list_local_schemes()
+    if not all_schemes:
         print(f"\n  Library is empty. Run: mondrian fetch --all\n")
         return
 
-    favorites  = load_favorites()
-    fav_orig   = set(favorites)
+    favorites = load_favorites()
+    fav_orig  = set(favorites)
 
-    print(f"\n  Local scheme library — {len(schemes)} schemes  (★ = bookmarked)")
+    # Ask whether to browse all or just favorites
+    fav_count = sum(1 for n, _ in all_schemes if n in favorites)
+    if fav_count:
+        print(f"\n  Browse  [A] all ({len(all_schemes)})  [F] favorites ({fav_count})", end="  ")
+        try:
+            mode = input().strip().upper()
+        except (EOFError, KeyboardInterrupt):
+            mode = "A"
+        if mode == "F":
+            schemes = [(n, p) for n, p in all_schemes if n in favorites]
+            label   = f"Favorites — {len(schemes)} schemes"
+        else:
+            schemes = all_schemes
+            label   = f"All schemes — {len(schemes)}"
+    else:
+        schemes = all_schemes
+        label   = f"All schemes — {len(schemes)}"
+
+    print(f"\n  {label}  (★ = bookmarked)")
     print(f"  {SCHEMES_DIR}")
     print(f"\n  Swatches: bg · fg · bold · selbg · selfg\n")
 
