@@ -206,3 +206,55 @@ def preview_all_directions(directions: dict, fg: tuple = (0.063, 0.063, 0.063)) 
             fg=fg,
         ))
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# .itermcolors loading
+# ---------------------------------------------------------------------------
+
+def load_itermcolors(path: str) -> dict:
+    """
+    Parse a .itermcolors plist file.
+    Returns {bg, fg, bold, selbg, selfg} as hex strings — same shape as
+    derive_state_colors(), so hooks consume it without changes.
+    """
+    import plistlib
+
+    with open(path, "rb") as f:
+        data = plistlib.load(f)
+
+    def key_to_hex(key: str, fallback: tuple) -> str:
+        c = data.get(key, {})
+        r = c.get("Red Component",   fallback[0])
+        g = c.get("Green Component", fallback[1])
+        b = c.get("Blue Component",  fallback[2])
+        return srgb_to_hex(r, g, b)
+
+    fg_hex   = key_to_hex("Foreground Color", (0.063, 0.063, 0.063))
+    bold_hex = key_to_hex("Bold Color", hex_to_srgb(fg_hex)) if "Bold Color" in data else fg_hex
+
+    return {
+        "bg":    key_to_hex("Background Color",   (0.98, 0.98, 0.98)),
+        "fg":    fg_hex,
+        "bold":  bold_hex,
+        "selbg": key_to_hex("Selection Color",     (0.70, 0.84, 1.00)),
+        "selfg": key_to_hex("Selected Text Color", (0.00, 0.00, 0.00)),
+    }
+
+
+def scan_itermcolors(dirs: list[str]) -> list[tuple[str, str]]:
+    """
+    Scan directories recursively for .itermcolors files.
+    Returns sorted [(name, path)], deduped by stem (first occurrence wins).
+    """
+    from pathlib import Path
+
+    seen: dict[str, str] = {}
+    for d in dirs:
+        p = Path(d).expanduser()
+        if not p.is_dir():
+            continue
+        for f in sorted(p.rglob("*.itermcolors")):
+            if f.stem not in seen:
+                seen[f.stem] = str(f)
+    return sorted(seen.items(), key=lambda x: x[0].lower())

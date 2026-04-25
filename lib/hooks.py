@@ -138,22 +138,31 @@ def install_hooks(
     selbg_base = hex_to_srgb(selbg_base_hex)
 
     if active_colors is None:
-        active_hex    = palette.get("active",  "#D6DAE1")
-        active_colors = derive_state_colors(hex_to_srgb(active_hex), fg_base, selbg_base)
+        if "active_colors" in config:
+            active_colors = config["active_colors"]
+        else:
+            active_hex    = palette.get("active",  "#D6DAE1")
+            active_colors = derive_state_colors(hex_to_srgb(active_hex), fg_base, selbg_base)
 
     if blocked_colors is None:
-        blocked_hex    = palette.get("blocked", "#F9E0DC")
-        blocked_colors = derive_state_colors(hex_to_srgb(blocked_hex), fg_base, selbg_base)
+        if "blocked_colors" in config:
+            blocked_colors = config["blocked_colors"]
+        else:
+            blocked_hex    = palette.get("blocked", "#F9E0DC")
+            blocked_colors = derive_state_colors(hex_to_srgb(blocked_hex), fg_base, selbg_base)
 
     if waiting_colors is None:
-        waiting_hex    = palette.get("waiting", "#FAFAFA")
-        waiting_colors = {
-            "bg":    waiting_hex,
-            "fg":    fg_base_hex,
-            "bold":  fg_base_hex,
-            "selbg": selbg_base_hex,
-            "selfg": selfg_base_hex,
-        }
+        if "waiting_colors" in config:
+            waiting_colors = config["waiting_colors"]
+        else:
+            waiting_hex    = palette.get("waiting", "#FAFAFA")
+            waiting_colors = {
+                "bg":    waiting_hex,
+                "fg":    fg_base_hex,
+                "bold":  fg_base_hex,
+                "selbg": selbg_base_hex,
+                "selfg": selfg_base_hex,
+            }
 
     # Transparency (optional)
     tr = config.get("transparency") or {}

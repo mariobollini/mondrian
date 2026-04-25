@@ -74,7 +74,7 @@ def cmd_configure() -> None:
     from lib.iterm import read_profile_colors, write_dynamic_profiles, query_terminal_transparency
     from lib.hooks import install_hooks
     from lib.chat import pick_direction_interactively
-    from lib.colors import srgb_to_hex
+    from lib.colors import srgb_to_hex, hex_to_srgb
 
     print("\n  mondrian configure\n")
 
@@ -83,39 +83,71 @@ def cmd_configure() -> None:
     print(f"  Background       : {srgb_to_hex(*profile['bg'])}")
     print(f"  Foreground       : {srgb_to_hex(*profile['fg'])}")
 
-    waiting, active, blocked, label = pick_direction_interactively(
+    waiting, active, blocked, label, custom_colors = pick_direction_interactively(
         bg=profile["bg"],
         fg=profile["fg"],
     )
 
-    # Direction D has no color delta — transparency is required for it to work
-    transparency_required = (active == waiting)
+    if custom_colors:
+        w_hex = custom_colors["waiting"]["bg"]
+        a_hex = custom_colors["active"]["bg"]
+        b_hex = custom_colors["blocked"]["bg"]
+        transparency_required = (w_hex == a_hex)
+    else:
+        transparency_required = (active == waiting)
+
     transparency_config = _pick_transparency(query_terminal_transparency, required=transparency_required)
 
-    # Persist config first so install_hooks reads the correct palette
-    config_data = {
-        "source_profile": {"guid": profile["guid"], "name": profile["name"]},
-        "palette": {
-            "direction": label,
-            "waiting": srgb_to_hex(*waiting),
-            "active":  srgb_to_hex(*active),
-            "blocked": srgb_to_hex(*blocked),
-        },
-        "fg":    srgb_to_hex(*profile["fg"]),
-        "selbg": srgb_to_hex(*profile["selbg"]),
-        "selfg": srgb_to_hex(*profile["selfg"]),
-    }
+    # Build config and resolve the rgb tuples needed for Dynamic Profiles
+    if custom_colors:
+        config_data = {
+            "source_profile": {"guid": profile["guid"], "name": profile["name"]},
+            "palette": {
+                "direction": "custom",
+                "waiting": w_hex,
+                "active":  a_hex,
+                "blocked": b_hex,
+            },
+            "waiting_colors": custom_colors["waiting"],
+            "active_colors":  custom_colors["active"],
+            "blocked_colors": custom_colors["blocked"],
+            "fg":    custom_colors["waiting"]["fg"],
+            "selbg": custom_colors["waiting"]["selbg"],
+            "selfg": custom_colors["waiting"]["selfg"],
+        }
+        dp_waiting = hex_to_srgb(w_hex)
+        dp_active  = hex_to_srgb(a_hex)
+        dp_blocked = hex_to_srgb(b_hex)
+        dp_fg      = hex_to_srgb(custom_colors["waiting"]["fg"])
+    else:
+        config_data = {
+            "source_profile": {"guid": profile["guid"], "name": profile["name"]},
+            "palette": {
+                "direction": label,
+                "waiting": srgb_to_hex(*waiting),
+                "active":  srgb_to_hex(*active),
+                "blocked": srgb_to_hex(*blocked),
+            },
+            "fg":    srgb_to_hex(*profile["fg"]),
+            "selbg": srgb_to_hex(*profile["selbg"]),
+            "selfg": srgb_to_hex(*profile["selfg"]),
+        }
+        dp_waiting, dp_active, dp_blocked = waiting, active, blocked
+        dp_fg = profile["fg"]
+
     if transparency_config:
         config_data["transparency"] = transparency_config
+
+    # Persist config first so install_hooks reads the correct palette
     _save_config(config_data)
 
     # Write Dynamic Profiles
     path = write_dynamic_profiles(
         parent_guid=profile["guid"],
-        waiting=waiting,
-        active=active,
-        blocked=blocked,
-        fg=profile["fg"],
+        waiting=dp_waiting,
+        active=dp_active,
+        blocked=dp_blocked,
+        fg=dp_fg,
     )
     print(f"  Dynamic Profiles → {path}")
 
