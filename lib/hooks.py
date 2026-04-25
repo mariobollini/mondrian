@@ -171,6 +171,7 @@ def install_hooks(
 
     hook_commands = {
         "UserPromptSubmit": _active_cmd(active_colors,  active_alpha),
+        "PreToolUse":       _active_cmd(active_colors,  active_alpha),  # restores active after permission grant
         "Stop":             _restore_cmd(waiting_colors, waiting_alpha),
         "Notification":     _blocked_cmd(blocked_colors),  # color only, transparency unchanged
     }
