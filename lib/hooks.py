@@ -16,7 +16,7 @@ RESTORE_SEQ_PATH = Path("~/.mondrian/restore_seq.sh").expanduser()
 
 _FS_CHECK = (
     "osascript -e "
-    "'tell application \"iTerm2\" to is full screen of current window' "
+    "'tell application \"iTerm2\" to get full screen of current window' "
     "2>/dev/null | grep -q true"
 )
 
@@ -55,22 +55,28 @@ def _active_cmd(
     colors: dict,
     alpha: Optional[float] = None,
     fullscreen_colors: Optional[dict] = None,
+    reset_stop: bool = False,
 ) -> str:
     """
     UserPromptSubmit / PreToolUse hook.
+    reset_stop=True (UserPromptSubmit only): writes 0 to the stop timestamp
+    so the Notification timing guard always passes for the current turn.
     If transparency is configured, wraps the AppleScript call in a full-screen
     guard — iTerm2 full-screen windows have no background to show through, so
     we skip the opacity change and optionally use a different color instead
     (fullscreen_colors, for Direction D where active == waiting).
     """
-    send = _send_seq(_colors_seq(**colors))
-    if alpha is None:
-        return _join(send)
+    reset = f"echo 0 > {STOP_TS_FILE}"
+    send  = _send_seq(_colors_seq(**colors))
 
-    fs_send = _send_seq(_colors_seq(**(fullscreen_colors or colors)))
+    if alpha is None:
+        return _join(reset, send) if reset_stop else _join(send)
+
+    fs_send  = _send_seq(_colors_seq(**(fullscreen_colors or colors)))
     windowed = f"{send}; {_transparency_stmt(alpha)}"
+    prefix   = f"{reset}; " if reset_stop else ""
     return (
-        f"if {_FS_CHECK}; "
+        f"{prefix}if {_FS_CHECK}; "
         f"then {fs_send}; "
         f"else {windowed}; fi # Mondrian"
     )
@@ -99,33 +105,38 @@ def _blocked_cmd(
     waiting_colors: Optional[dict] = None,
     grace: int = 3,
     expire: int = 0,
+    waiting_alpha: Optional[float] = None,
 ) -> str:
     """
     Notification hook: only show blocked if Stop fired >grace seconds ago
     (filters the spurious Notification at the end of normal responses).
 
+    waiting_alpha: if set, resets transparency to this value so red is fully
+    visible even when coming from an active state with high transparency.
+
     If expire > 0, a background subshell auto-restores waiting colors after
     that many seconds — unless Stop or a new UserPromptSubmit has fired in
-    the meantime.  This clears the red state automatically when the user is
-    composing a reply and hasn't submitted yet.
+    the meantime.
     """
-    send = _send_seq(_colors_seq(**colors))
+    send          = _send_seq(_colors_seq(**colors))
+    opacity_reset = f"; {_transparency_stmt(waiting_alpha)}" if waiting_alpha is not None else ""
 
     # Always stamp the blocked file — the shell focus-restore hook reads it.
     # A unique timestamp lets the auto-expire subshell detect superseded blocks.
     if expire > 0 and waiting_colors is not None:
-        w_send = _send_seq(_colors_seq(**waiting_colors))
+        w_send    = _send_seq(_colors_seq(**waiting_colors))
+        w_restore = w_send + (f"; {_transparency_stmt(waiting_alpha)}" if waiting_alpha is not None else "")
         inner = (
             f"NOW=$(date +%s); "
             f"echo $NOW > {BLOCKED_TS_FILE}; "
-            f"{send}; "
+            f"{send}{opacity_reset}; "
             f"(sleep {expire}; "
             f"BT=$(cat {BLOCKED_TS_FILE} 2>/dev/null||echo 0); "
             f"ST=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
-            f'[ "$BT" = "$NOW" ] && [ $ST -lt $BT ] && {w_send}) &'
+            f'[ "$BT" = "$NOW" ] && [ $ST -lt $BT ] && {w_restore}) &'
         )
     else:
-        inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}"
+        inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}{opacity_reset}"
 
     return (
         f"ts=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
@@ -258,10 +269,10 @@ def install_hooks(
     blocked_expire = config.get("blocked_expire", 0)
 
     hook_commands = {
-        "UserPromptSubmit": _active_cmd(active_colors, active_alpha, fullscreen_active),
+        "UserPromptSubmit": _active_cmd(active_colors, active_alpha, fullscreen_active, reset_stop=True),
         "PreToolUse":       _active_cmd(active_colors, active_alpha, fullscreen_active),
         "Stop":             _restore_cmd(waiting_colors, waiting_alpha),
-        "Notification":     _blocked_cmd(blocked_colors, waiting_colors, expire=blocked_expire),
+        "Notification":     _blocked_cmd(blocked_colors, waiting_colors, expire=blocked_expire, waiting_alpha=waiting_alpha),
     }
 
     settings = _load_settings()
