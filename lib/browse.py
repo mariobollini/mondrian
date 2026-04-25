@@ -74,7 +74,7 @@ def _row(idx: int, name: str, colors: dict | None, bookmarked: bool, selected: b
 # Browser loop
 # ---------------------------------------------------------------------------
 
-def run_browser(schemes: list, favorites: set, load_fn) -> set:
+def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = False) -> set:
     """
     Run the full-screen browser. Returns the (possibly updated) favorites set.
 
@@ -84,6 +84,7 @@ def run_browser(schemes: list, favorites: set, load_fn) -> set:
     if not schemes:
         return favorites
 
+    schemes = list(schemes)  # work with a local copy so live_filter splices are safe
     cache:  dict = {}
     cursor: int  = 0
     vtop:   int  = 0
@@ -149,6 +150,13 @@ def run_browser(schemes: list, favorites: set, load_fn) -> set:
                 name = schemes[cursor][0]
                 if name in favorites:
                     favorites.discard(name)
+                    if live_filter:
+                        schemes.pop(cursor)
+                        # invalidate any cached index above the removed slot
+                        cache = {i: v for i, v in cache.items() if i < cursor}
+                        if not schemes:
+                            break
+                        cursor = min(cursor, len(schemes) - 1)
                 else:
                     favorites.add(name)
                 draw()

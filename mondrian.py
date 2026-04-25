@@ -303,11 +303,13 @@ def cmd_browse() -> None:
             mode = input().strip().upper()
         except (EOFError, KeyboardInterrupt):
             mode = "A"
-        schemes = [(n, p) for n, p in all_schemes if n in favorites] if mode == "F" else all_schemes
+        fav_mode = mode == "F"
+        schemes  = [(n, p) for n, p in all_schemes if n in favorites] if fav_mode else all_schemes
     else:
-        schemes = all_schemes
+        fav_mode = False
+        schemes  = all_schemes
 
-    favorites = run_browser(schemes, favorites, load_itermcolors)
+    favorites = run_browser(schemes, favorites, load_itermcolors, live_filter=fav_mode)
 
     if favorites != fav_orig:
         save_favorites(favorites)
