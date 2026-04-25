@@ -11,9 +11,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-SCHEMES_DIR  = Path("~/.mondrian/schemes").expanduser()
-_REMOTE_BASE = "https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/"
-_REMOTE_API  = "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/schemes"
+SCHEMES_DIR    = Path("~/.mondrian/schemes").expanduser()
+FAVORITES_PATH = Path("~/.mondrian/favorites.json").expanduser()
+_REMOTE_BASE   = "https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/"
+_REMOTE_API    = "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/schemes"
 
 
 def ensure_schemes_dir() -> Path:
@@ -67,6 +68,20 @@ def copy_to_library(src_path: str) -> Path:
     dest = SCHEMES_DIR / Path(src_path).name
     shutil.copy2(src_path, dest)
     return dest
+
+
+def load_favorites() -> set[str]:
+    if not FAVORITES_PATH.exists():
+        return set()
+    with open(FAVORITES_PATH) as f:
+        return set(json.load(f))
+
+
+def save_favorites(names: set[str]) -> None:
+    FAVORITES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(FAVORITES_PATH, "w") as f:
+        json.dump(sorted(names), f, indent=2)
+        f.write("\n")
 
 
 def list_local_schemes() -> list[tuple[str, str]]:

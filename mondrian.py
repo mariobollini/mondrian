@@ -284,7 +284,7 @@ def cmd_fetch() -> None:
 
 
 def cmd_browse() -> None:
-    from lib.fetch import list_local_schemes, SCHEMES_DIR
+    from lib.fetch import list_local_schemes, load_favorites, save_favorites, SCHEMES_DIR
     from lib.colors import load_itermcolors, render_scheme_row
 
     schemes = list_local_schemes()
@@ -292,31 +292,77 @@ def cmd_browse() -> None:
         print(f"\n  Library is empty. Run: mondrian fetch --all\n")
         return
 
-    print(f"\n  Local scheme library — {len(schemes)} schemes")
-    print(f"  {SCHEMES_DIR}\n")
-    print(f"  {'Name':<32}  bg    fg    bold  selbg selfg   hex")
-    print("  " + "─" * 64)
+    favorites  = load_favorites()
+    fav_orig   = set(favorites)
 
-    page = 30
-    for i, (name, path) in enumerate(schemes):
+    print(f"\n  Local scheme library — {len(schemes)} schemes  (★ = bookmarked)")
+    print(f"  {SCHEMES_DIR}")
+    print(f"\n  Swatches: bg · fg · bold · selbg · selfg\n")
+
+    page      = 30
+    offset    = 0
+    redisplay = True
+
+    while offset < len(schemes):
+        end = min(offset + page, len(schemes))
+
+        if redisplay:
+            for i in range(offset, end):
+                name, path = schemes[i]
+                try:
+                    colors = load_itermcolors(path)
+                    row = render_scheme_row(name, colors, bookmarked=(name in favorites))
+                    # row starts with 2 indent spaces; replace with row number
+                    print(f"  {i + 1:3d}  {row[2:]}")
+                except Exception:
+                    print(f"  {i + 1:3d}    {name}  (unreadable)")
+
+        if end >= len(schemes):
+            break
+
+        remaining = len(schemes) - end
         try:
-            colors = load_itermcolors(path)
-            print(render_scheme_row(name, colors))
-        except Exception:
-            print(f"  {name}  (unreadable)")
+            raw = input(
+                f"\n  — {remaining} more —"
+                f"  Enter · b <#> bookmark · q quit: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            raw = "q"
 
-        # Pause every `page` lines so output doesn't scroll off screen
-        if (i + 1) % page == 0 and (i + 1) < len(schemes):
-            remaining = len(schemes) - (i + 1)
-            try:
-                raw = input(f"\n  — {remaining} more — [Enter to continue, q to quit]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                raw = "q"
-            if raw == "q":
-                break
+        if raw == "q":
+            break
+
+        if raw.startswith("b"):
+            toggled = []
+            for tok in raw[1:].split():
+                try:
+                    idx = int(tok) - 1
+                    if 0 <= idx < len(schemes):
+                        n = schemes[idx][0]
+                        if n in favorites:
+                            favorites.discard(n)
+                            toggled.append(f"  ✗ {n}")
+                        else:
+                            favorites.add(n)
+                            toggled.append(f"  ★ {n}")
+                except ValueError:
+                    pass
+            if toggled:
+                print("\n" + "\n".join(toggled))
+            # Redisplay the same page with updated markers
+            redisplay = True
             print()
+            continue
 
-    print()
+        offset    = end
+        redisplay = True
+        print()
+
+    if favorites != fav_orig:
+        save_favorites(favorites)
+        print(f"\n  Bookmarks saved — {len(favorites)} total.\n")
+    else:
+        print()
 
 
 def cmd_reset() -> None:

@@ -242,13 +242,22 @@ def load_itermcolors(path: str) -> dict:
     }
 
 
-def render_scheme_row(name: str, colors: dict, name_width: int = 30) -> str:
-    """Single-line display: left-padded name + five color swatches + bg hex."""
-    def swatch(hex_val: str) -> str:
-        return f"{_ansi_bg(*hex_to_srgb(hex_val))}  {RESET}"
+def render_scheme_row(name: str, colors: dict, name_width: int = 32, bookmarked: bool = False) -> str:
+    """Single-line display: name + five color swatches + bg hex."""
+    mark = "★ " if bookmarked else "  "
 
-    swatches = "".join(swatch(colors[k]) for k in ("bg", "fg", "bold", "selbg", "selfg"))
-    return f"  {name:<{name_width}} {swatches}  {colors['bg']}"
+    def swatch(hex_val: str) -> str:
+        rgb = hex_to_srgb(hex_val)
+        # Thin dark/light border so near-black and near-white swatches are visible.
+        h, s, l = srgb_to_hsl(*rgb)
+        border_l = clamp(l + (0.25 if l < 0.5 else -0.25))
+        border = hsl_to_srgb(h, s, border_l)
+        b = _ansi_bg(*border)
+        c = _ansi_bg(*rgb)
+        return f"{b} {c}    {b} {RESET}"
+
+    swatches = " ".join(swatch(colors[k]) for k in ("bg", "fg", "bold", "selbg", "selfg"))
+    return f"  {mark}{name:<{name_width}} {swatches}  {colors['bg']}"
 
 
 def scan_itermcolors(dirs: list[str]) -> list[tuple[str, str]]:
