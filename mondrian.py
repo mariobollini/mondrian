@@ -86,7 +86,7 @@ def cmd_configure() -> None:
     print(f"  Background       : {srgb_to_hex(*profile['bg'])}")
     print(f"  Foreground       : {srgb_to_hex(*profile['fg'])}")
 
-    waiting, active, blocked, label, custom_colors = pick_direction_interactively(
+    waiting, active, blocked, label, custom_colors, base_overrides = pick_direction_interactively(
         bg=profile["bg"],
         fg=profile["fg"],
     )
@@ -123,6 +123,11 @@ def cmd_configure() -> None:
         dp_blocked = hex_to_srgb(b_hex)
         dp_fg      = hex_to_srgb(custom_colors["waiting"]["fg"])
     else:
+        # When the user based A-D derivation on an iTerm2 scheme, use that
+        # scheme's fg/selbg/selfg rather than the detected profile values.
+        fg_hex    = base_overrides["fg"]    if base_overrides else srgb_to_hex(*profile["fg"])
+        selbg_hex = base_overrides["selbg"] if base_overrides else srgb_to_hex(*profile["selbg"])
+        selfg_hex = base_overrides["selfg"] if base_overrides else srgb_to_hex(*profile["selfg"])
         config_data = {
             "source_profile": {"guid": profile["guid"], "name": profile["name"]},
             "palette": {
@@ -131,12 +136,12 @@ def cmd_configure() -> None:
                 "active":  srgb_to_hex(*active),
                 "blocked": srgb_to_hex(*blocked),
             },
-            "fg":    srgb_to_hex(*profile["fg"]),
-            "selbg": srgb_to_hex(*profile["selbg"]),
-            "selfg": srgb_to_hex(*profile["selfg"]),
+            "fg":    fg_hex,
+            "selbg": selbg_hex,
+            "selfg": selfg_hex,
         }
         dp_waiting, dp_active, dp_blocked = waiting, active, blocked
-        dp_fg = profile["fg"]
+        dp_fg = hex_to_srgb(fg_hex)
 
     if transparency_config:
         config_data["transparency"] = transparency_config
@@ -316,19 +321,19 @@ def cmd_fetch() -> None:
 
 
 def cmd_browse() -> None:
-    from lib.fetch import list_local_schemes, load_favorites, save_favorites
+    from lib.chat import _get_all_schemes
     from lib.colors import load_itermcolors
     from lib.browse import run_browser
+    from lib.fetch import save_favorites
 
-    all_schemes = list_local_schemes()
+    all_schemes, favorites = _get_all_schemes()
     if not all_schemes:
         print(f"\n  Library is empty. Run: mondrian fetch --all\n")
         return
 
-    favorites = load_favorites()
     fav_orig  = set(favorites)
-
     fav_count = sum(1 for n, _ in all_schemes if n in favorites)
+
     if fav_count:
         print(f"\n  Browse  [A] all ({len(all_schemes)})  [F] favorites ({fav_count})", end="  ")
         try:

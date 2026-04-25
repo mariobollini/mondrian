@@ -114,6 +114,45 @@ def query_terminal_transparency() -> Optional[float]:
     return None
 
 
+def list_color_presets() -> list[tuple[str, dict]]:
+    """
+    Return [(name, {bg,fg,bold,selbg,selfg}), ...] from iTerm2 Custom Color Presets.
+    These are color schemes the user has imported via the iTerm2 Color Presets menu.
+    """
+    from .colors import srgb_to_hex
+    if not PREFS_PATH.exists():
+        return []
+    try:
+        with open(PREFS_PATH, "rb") as f:
+            prefs = plistlib.load(f)
+    except Exception:
+        return []
+
+    presets = prefs.get("Custom Color Presets", {})
+
+    def _hex(color_dict, default: tuple) -> str:
+        if not color_dict:
+            return srgb_to_hex(*default)
+        r = color_dict.get("Red Component",   default[0])
+        g = color_dict.get("Green Component", default[1])
+        b = color_dict.get("Blue Component",  default[2])
+        return srgb_to_hex(r, g, b)
+
+    result = []
+    for name, colors in presets.items():
+        fg_dict    = colors.get("Foreground Color")
+        bold_dict  = colors.get("Bold Color") or fg_dict
+        result.append((name, {
+            "bg":    _hex(colors.get("Background Color"),     (0.98, 0.98, 0.98)),
+            "fg":    _hex(fg_dict,                            (0.063, 0.063, 0.063)),
+            "bold":  _hex(bold_dict,                          (0.063, 0.063, 0.063)),
+            "selbg": _hex(colors.get("Selection Color"),      (0.702, 0.843, 1.0)),
+            "selfg": _hex(colors.get("Selected Text Color"),  (0.0, 0.0, 0.0)),
+        }))
+
+    return sorted(result, key=lambda x: x[0].lower())
+
+
 def list_profiles() -> list[dict]:
     """Return all iTerm2 profiles, excluding any Mondrian-managed ones."""
     if not PREFS_PATH.exists():

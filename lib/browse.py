@@ -93,27 +93,49 @@ def _row(idx: int, name: str, colors: dict | None, bookmarked: bool, selected: b
 # Browser loop
 # ---------------------------------------------------------------------------
 
-def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = False) -> set:
+def run_browser(
+    schemes: list,
+    favorites: set,
+    load_fn,
+    live_filter: bool = False,
+    select_mode: bool = False,
+    prompt: str = "",
+):
     """
-    Run the full-screen browser. Returns the (possibly updated) favorites set.
+    Run the full-screen browser.
 
-    schemes : [(name, path), ...]
-    load_fn : callable(path) -> {bg, fg, bold, selbg, selfg} hex dict
+    Bookmark mode (select_mode=False, default):
+      Returns the (possibly updated) favorites set.
+
+    Select mode (select_mode=True):
+      Enter picks the highlighted scheme and returns its colors dict.
+      Returns dict on selection, None if cancelled (q).
+
+    schemes     : [(name, path), ...]
+    load_fn     : callable(path) -> {bg, fg, bold, selbg, selfg} hex dict
+    live_filter : (bookmark mode) splice out items when un-bookmarked
+    select_mode : Enter picks instead of toggling bookmark
+    prompt      : shown in header when select_mode=True (e.g. "Pick: Waiting")
     """
     if not schemes:
-        return favorites
+        return None if select_mode else favorites
 
     schemes = list(schemes)  # work with a local copy so live_filter splices are safe
     cache:  dict = {}
     cursor: int  = 0
     vtop:   int  = 0
+    _selected = None
 
     def colors_for(i: int):
         if i not in cache:
-            try:
-                cache[i] = load_fn(schemes[i][1])
-            except Exception:
-                cache[i] = None
+            entry = schemes[i][1]
+            if isinstance(entry, dict):  # pre-loaded colors (e.g. from iTerm2 plist presets)
+                cache[i] = entry
+            else:
+                try:
+                    cache[i] = load_fn(entry)
+                except Exception:
+                    cache[i] = None
         return cache[i]
 
     def ui_h() -> int:
@@ -135,9 +157,15 @@ def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = Fals
         fc  = sum(1 for n, _ in schemes if n in favorites)
 
         buf = [_HOME]
-        buf.append(f"  {len(schemes)} schemes · {fc} bookmarked{_EOL}")
+        if select_mode:
+            header = f"  {prompt}  —  {len(schemes)} schemes · {fc} bookmarked"
+            action = "Enter = select"
+        else:
+            header = f"  {len(schemes)} schemes · {fc} bookmarked"
+            action = "Enter = bookmark"
+        buf.append(f"{header}{_EOL}")
         buf.append(f"  Aa = fg on bg   Bb = bold on bg   Cc = selected{_EOL}")
-        buf.append(f"  ↑↓ jk · Enter = bookmark · q = done{_EOL}")
+        buf.append(f"  ↑↓ jk · {action} · q = {'cancel' if select_mode else 'done'}{_EOL}")
         buf.append(_EOL)
 
         for i in range(vtop, end):
@@ -163,22 +191,25 @@ def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = Fals
         while True:
             key = _getch()
 
-            if key in ("q", "Q", "\x03"):               # quit
+            if key in ("q", "Q", "\x03"):               # quit / cancel
                 break
-            elif key in ("\r", "\n", " "):              # toggle bookmark
-                name = schemes[cursor][0]
-                if name in favorites:
-                    favorites.discard(name)
-                    if live_filter:
-                        schemes.pop(cursor)
-                        # invalidate any cached index above the removed slot
-                        cache = {i: v for i, v in cache.items() if i < cursor}
-                        if not schemes:
-                            break
-                        cursor = min(cursor, len(schemes) - 1)
-                else:
-                    favorites.add(name)
-                draw()
+            elif key in ("\r", "\n", " "):
+                if select_mode:
+                    _selected = colors_for(cursor)
+                    break
+                else:                                   # toggle bookmark
+                    name = schemes[cursor][0]
+                    if name in favorites:
+                        favorites.discard(name)
+                        if live_filter:
+                            schemes.pop(cursor)
+                            cache = {i: v for i, v in cache.items() if i < cursor}
+                            if not schemes:
+                                break
+                            cursor = min(cursor, len(schemes) - 1)
+                    else:
+                        favorites.add(name)
+                    draw()
             elif key in ("\x1b[A", "\x1bOA", "k"):     # up
                 cursor = max(0, cursor - 1)
                 draw()
@@ -202,4 +233,4 @@ def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = Fals
         sys.stdout.write(_SHOW + _CLR + _HOME)
         sys.stdout.flush()
 
-    return favorites
+    return _selected if select_mode else favorites
