@@ -39,33 +39,52 @@ def _getch() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Row rendering (self-contained so the highlight doesn't fight the swatches)
+# Row rendering
 # ---------------------------------------------------------------------------
 
-def _swatch(hex_val: str) -> str:
-    from .colors import hex_to_srgb, srgb_to_hsl, hsl_to_srgb, clamp
-    r, g, b = hex_to_srgb(hex_val)
-    h, s, l = srgb_to_hsl(r, g, b)
-    bl      = clamp(l + (0.25 if l < 0.5 else -0.25))
-    br, bg_, bb = hsl_to_srgb(h, s, bl)
-    border  = f"\033[48;2;{round(br*255)};{round(bg_*255)};{round(bb*255)}m"
-    fill    = f"\033[48;2;{round(r*255)};{round(g*255)};{round(b*255)}m"
-    return f"{border} {fill}    {border} {_RESET}"
+_NAME_W = 26   # visible name column width (covers longest common scheme names)
+
+
+def _esc(hex_val: str, layer: str) -> str:
+    """Return an ANSI SGR color code (38=fg, 48=bg) for a hex color."""
+    from .colors import hex_to_srgb
+    r, g, b = (round(v * 255) for v in hex_to_srgb(hex_val))
+    code = 48 if layer == "bg" else 38
+    return f"\033[{code};2;{r};{g};{b}m"
+
+
+def _text_swatches(colors: dict) -> str:
+    """
+    Three 4-char text samples that show how each rendering condition looks:
+      Aa  — normal fg text on bg
+      Bb  — bold text on bg
+      Cc  — selected text (selfg on selbg)
+    """
+    BG  = _esc(colors["bg"],    "bg")
+    FG  = _esc(colors["fg"],    "fg")
+    BD  = _esc(colors["bold"],  "fg")
+    SBG = _esc(colors["selbg"], "bg")
+    SFG = _esc(colors["selfg"], "fg")
+
+    normal = f"{BG}{FG} Aa {_RESET}"
+    bold   = f"{BG}{_BOLD}{BD} Bb {_RESET}"
+    sel    = f"{SBG}{SFG} Cc {_RESET}"
+
+    return f"{normal}{bold}{sel}"
 
 
 def _row(idx: int, name: str, colors: dict | None, bookmarked: bool, selected: bool) -> str:
-    mark   = "★ " if bookmarked else "  "
-    num    = f"{idx + 1:3d}"
-    arrow  = "►" if selected else " "
+    mark  = "★ " if bookmarked else "  "
+    num   = f"{idx + 1:3d}"
+    arrow = "►" if selected else " "
 
     if colors is None:
         body = f"{mark}{name}  (unreadable)"
     else:
-        name_str = f"{mark}{name:<32}"
+        name_str = f"{mark}{name:<{_NAME_W}}"
         if selected:
             name_str = f"{_BOLD}{name_str}{_RESET}"
-        swatches = " ".join(_swatch(colors[k]) for k in ("bg", "fg", "bold", "selbg", "selfg"))
-        body = f"{name_str} {swatches}  {colors['bg']}"
+        body = f"{name_str}  {_text_swatches(colors)}  {colors['bg']}"
 
     return f"  {arrow} {num}  {body}{_EOL}"
 
@@ -117,8 +136,8 @@ def run_browser(schemes: list, favorites: set, load_fn, live_filter: bool = Fals
 
         buf = [_HOME]
         buf.append(f"  {len(schemes)} schemes · {fc} bookmarked{_EOL}")
-        buf.append(f"  Swatches: bg · fg · bold · selbg · selfg{_EOL}")
-        buf.append(f"  ↑↓ / jk navigate   Enter = bookmark   q = done{_EOL}")
+        buf.append(f"  Aa = fg on bg   Bb = bold on bg   Cc = selected{_EOL}")
+        buf.append(f"  ↑↓ jk · Enter = bookmark · q = done{_EOL}")
         buf.append(_EOL)
 
         for i in range(vtop, end):
