@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-mondrian — iTerm2 session-state kanban for Claude Code
+mondrian — iTerm2 session-state colorizer for Claude Code
 
 Commands:
-  configure   Auto-derive palette from your terminal + chat to refine, then apply
+  configure   Auto-derive palette from your terminal, then apply
   apply       Re-apply the saved palette without reconfiguring
   status      Show current install state
-  uninstall   Remove Dynamic Profiles and hooks
+  fetch       Download schemes from iTerm2-Color-Schemes  (fetch --all for everything)
+  browse      Browse your local scheme library with color swatches
+  reset       Restore terminal colors and remove all mondrian config
+  uninstall   Alias for reset
 """
 
 import json
@@ -251,6 +254,71 @@ def _restore_terminal_now(config: dict) -> None:
         )
 
 
+def cmd_fetch() -> None:
+    from lib.fetch import fetch_scheme, fetch_all_schemes, SCHEMES_DIR
+
+    args = sys.argv[2:]
+    if not args or args[0] in ("-h", "--help"):
+        print("\n  Usage: mondrian fetch <name>")
+        print("         mondrian fetch --all\n")
+        return
+
+    if args[0] == "--all":
+        print(f"\n  Fetching all schemes from iTerm2-Color-Schemes …\n")
+
+        def progress(i, total, name):
+            bar = "█" * round(20 * i / total)
+            print(f"  [{bar:<20}] {i}/{total}  {name:<35}", end="\r", flush=True)
+
+        ok, total = fetch_all_schemes(on_progress=progress)
+        print(f"\n\n  Done. {ok}/{total} schemes saved to {SCHEMES_DIR}\n")
+    else:
+        name = " ".join(args)  # allow multi-word names without quoting
+        print(f"\n  Fetching '{name}' …")
+        try:
+            path = fetch_scheme(name)
+            print(f"  Saved → {path}\n")
+        except Exception as e:
+            print(f"  Failed: {e}\n", file=sys.stderr)
+            sys.exit(1)
+
+
+def cmd_browse() -> None:
+    from lib.fetch import list_local_schemes, SCHEMES_DIR
+    from lib.colors import load_itermcolors, render_scheme_row
+
+    schemes = list_local_schemes()
+    if not schemes:
+        print(f"\n  Library is empty. Run: mondrian fetch --all\n")
+        return
+
+    print(f"\n  Local scheme library — {len(schemes)} schemes")
+    print(f"  {SCHEMES_DIR}\n")
+    print(f"  {'Name':<32}  bg    fg    bold  selbg selfg   hex")
+    print("  " + "─" * 64)
+
+    page = 30
+    for i, (name, path) in enumerate(schemes):
+        try:
+            colors = load_itermcolors(path)
+            print(render_scheme_row(name, colors))
+        except Exception:
+            print(f"  {name}  (unreadable)")
+
+        # Pause every `page` lines so output doesn't scroll off screen
+        if (i + 1) % page == 0 and (i + 1) < len(schemes):
+            remaining = len(schemes) - (i + 1)
+            try:
+                raw = input(f"\n  — {remaining} more — [Enter to continue, q to quit]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                raw = "q"
+            if raw == "q":
+                break
+            print()
+
+    print()
+
+
 def cmd_reset() -> None:
     from lib.iterm import remove_dynamic_profiles
     from lib.hooks import uninstall_hooks
@@ -283,6 +351,8 @@ COMMANDS = {
     "configure": cmd_configure,
     "apply":     cmd_apply,
     "status":    cmd_status,
+    "fetch":     cmd_fetch,
+    "browse":    cmd_browse,
     "reset":     cmd_reset,
     "uninstall": cmd_uninstall,
 }

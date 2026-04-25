@@ -242,6 +242,15 @@ def load_itermcolors(path: str) -> dict:
     }
 
 
+def render_scheme_row(name: str, colors: dict, name_width: int = 30) -> str:
+    """Single-line display: left-padded name + five color swatches + bg hex."""
+    def swatch(hex_val: str) -> str:
+        return f"{_ansi_bg(*hex_to_srgb(hex_val))}  {RESET}"
+
+    swatches = "".join(swatch(colors[k]) for k in ("bg", "fg", "bold", "selbg", "selfg"))
+    return f"  {name:<{name_width}} {swatches}  {colors['bg']}"
+
+
 def scan_itermcolors(dirs: list[str]) -> list[tuple[str, str]]:
     """
     Scan directories recursively for .itermcolors files.

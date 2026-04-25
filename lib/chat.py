@@ -13,6 +13,7 @@ from .colors import (
     hex_to_srgb, srgb_to_hex,
     load_itermcolors, scan_itermcolors,
 )
+from .fetch import SCHEMES_DIR, copy_to_library, list_local_schemes
 
 DEFAULT_SCAN_DIRS = ["~/Downloads", "~/Documents", "~/Desktop"]
 
@@ -130,14 +131,18 @@ def _pick_custom_inner() -> tuple[dict, dict, dict]:
     print("\n  Custom .itermcolors mode")
     print("  " + "─" * 42)
 
-    print(f"\n  Scanning {', '.join(DEFAULT_SCAN_DIRS)} …")
-    schemes = scan_itermcolors(DEFAULT_SCAN_DIRS)
+    # Library first, then default dirs — library schemes appear at top of list
+    all_scan_dirs = [str(SCHEMES_DIR)] + DEFAULT_SCAN_DIRS
+    library_names = {n for n, _ in list_local_schemes()}
+
+    print(f"\n  Scanning library + {', '.join(DEFAULT_SCAN_DIRS)} …")
+    schemes = scan_itermcolors(all_scan_dirs)
 
     if schemes:
         print(f"  Found {len(schemes)} scheme{'s' if len(schemes) != 1 else ''}:\n")
         _show_scheme_list(schemes)
     else:
-        print("  No .itermcolors files found in default locations.")
+        print("  No .itermcolors files found. Run: mondrian fetch --all")
 
     # Optional extra directory
     print()
@@ -155,11 +160,24 @@ def _pick_custom_inner() -> tuple[dict, dict, dict]:
             print(f"\n  Found {len(new)} more:\n")
             _show_scheme_list(new, start=start)
             schemes = schemes + new
+
+            # Offer to copy new finds into the library
+            outside_library = [(n, p) for n, p in new if n not in library_names]
+            if outside_library:
+                print()
+                try:
+                    raw = input(f"  Copy {len(outside_library)} new scheme(s) to your local library? [Y/n]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    raw = ""
+                if raw != "n":
+                    for _, p in outside_library:
+                        copy_to_library(p)
+                    print(f"  Saved to {SCHEMES_DIR}")
         else:
             print("  No new schemes found there.")
 
     if not schemes:
-        print("\n  No schemes found. Add .itermcolors files to ~/Downloads and re-run.\n")
+        print("\n  No schemes found. Run: mondrian fetch --all\n")
         sys.exit(1)
 
     print()
