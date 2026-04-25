@@ -9,9 +9,10 @@ from typing import Optional
 SETTINGS_PATH   = Path("~/.claude/settings.json").expanduser()
 CONFIG_PATH     = Path("~/.mondrian.json").expanduser()
 
-MONDRIAN_MARKER = "Mondrian"
-STOP_TS_FILE    = "/tmp/.mondrian_stop"
-BLOCKED_TS_FILE = "/tmp/.mondrian_blocked"
+MONDRIAN_MARKER  = "Mondrian"
+STOP_TS_FILE     = "/tmp/.mondrian_stop"
+BLOCKED_TS_FILE  = "/tmp/.mondrian_blocked"
+RESTORE_SEQ_PATH = Path("~/.mondrian/restore_seq.sh").expanduser()
 
 _FS_CHECK = (
     "osascript -e "
@@ -76,15 +77,16 @@ def _active_cmd(
 
 
 def _restore_cmd(colors: dict, alpha: Optional[float] = None) -> str:
-    """Stop hook: stamp the time so Notification can detect end-of-response."""
-    stamp = f"echo $(date +%s) > {STOP_TS_FILE}"
-    send  = _send_seq(_colors_seq(**colors))
+    """Stop hook: stamp the time, clear the blocked marker, restore colors."""
+    stamp         = f"echo $(date +%s) > {STOP_TS_FILE}"
+    clear_blocked = f"rm -f {BLOCKED_TS_FILE}"
+    send          = _send_seq(_colors_seq(**colors))
     if alpha is None:
-        return _join(stamp, send)
+        return _join(stamp, clear_blocked, send)
 
-    # Full-screen: stamp + colors (skip transparency — no background to show)
-    windowed   = f"{stamp}; {send}; {_transparency_stmt(alpha)}"
-    fullscreen = f"{stamp}; {send}"
+    # Full-screen: stamp + clear + colors (skip transparency — no background to show)
+    windowed   = f"{stamp}; {clear_blocked}; {send}; {_transparency_stmt(alpha)}"
+    fullscreen = f"{stamp}; {clear_blocked}; {send}"
     return (
         f"if {_FS_CHECK}; "
         f"then {fullscreen}; "
@@ -109,10 +111,10 @@ def _blocked_cmd(
     """
     send = _send_seq(_colors_seq(**colors))
 
+    # Always stamp the blocked file — the shell focus-restore hook reads it.
+    # A unique timestamp lets the auto-expire subshell detect superseded blocks.
     if expire > 0 and waiting_colors is not None:
         w_send = _send_seq(_colors_seq(**waiting_colors))
-        # Write a unique timestamp so the subshell can tell if a newer
-        # Notification has fired (invalidating this one).
         inner = (
             f"NOW=$(date +%s); "
             f"echo $NOW > {BLOCKED_TS_FILE}; "
@@ -123,13 +125,27 @@ def _blocked_cmd(
             f'[ "$BT" = "$NOW" ] && [ $ST -lt $BT ] && {w_send}) &'
         )
     else:
-        inner = send
+        inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}"
 
     return (
         f"ts=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
         f"[ $(($(date +%s)-ts)) -gt {grace} ] && "
         f"{{ {inner}; }} # Mondrian"
     )
+
+
+# ---------------------------------------------------------------------------
+# Restore sequence file
+# ---------------------------------------------------------------------------
+
+def _write_restore_seq(waiting_colors: dict) -> None:
+    """Write ~/.mondrian/restore_seq.sh used by the shell focus-restore hook."""
+    seq = _send_seq(_colors_seq(**waiting_colors))
+    RESTORE_SEQ_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RESTORE_SEQ_PATH.write_text(
+        f"#!/bin/sh\n{seq}\nrm -f {BLOCKED_TS_FILE}\n"
+    )
+    RESTORE_SEQ_PATH.chmod(0o755)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +276,7 @@ def install_hooks(
         entries.append(_make_hook_entry(command))
 
     _save_settings(settings)
+    _write_restore_seq(waiting_colors)
 
 
 def uninstall_hooks() -> None:

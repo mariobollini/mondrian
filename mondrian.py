@@ -173,6 +173,23 @@ def cmd_configure() -> None:
     install_hooks()
     print("  Hooks            → ~/.claude/settings.json")
 
+    # Optional shell focus-restore hook
+    from lib.shell import install_shell_hook, shell_hook_installed
+    print()
+    if not shell_hook_installed():
+        try:
+            raw = input(
+                "  Clear red on focus (adds precmd hook to shell rc)? [y/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            raw = ""
+        if raw == "y":
+            rc = install_shell_hook()
+            print(f"  Shell hook       → {rc}")
+            print(f"  Run: source {rc}  (or restart shell)")
+    else:
+        print("  Shell focus hook already installed.")
+
     print("\n  Done. Open a new iTerm2 session to see it in action.\n")
 
 
@@ -344,6 +361,7 @@ def cmd_browse() -> None:
 def cmd_reset() -> None:
     from lib.iterm import remove_dynamic_profiles
     from lib.hooks import uninstall_hooks
+    from lib.shell import remove_shell_hook
 
     config = _load_config()
 
@@ -353,6 +371,10 @@ def cmd_reset() -> None:
 
     remove_dynamic_profiles()
     uninstall_hooks()
+
+    removed_rc = remove_shell_hook()
+    for rc in removed_rc:
+        print(f"  Shell hook removed from {rc}")
 
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
