@@ -6,11 +6,18 @@ import json
 from pathlib import Path
 from typing import Optional
 
-SETTINGS_PATH = Path("~/.claude/settings.json").expanduser()
-CONFIG_PATH   = Path("~/.mondrian.json").expanduser()
+SETTINGS_PATH   = Path("~/.claude/settings.json").expanduser()
+CONFIG_PATH     = Path("~/.mondrian.json").expanduser()
 
 MONDRIAN_MARKER = "Mondrian"
 STOP_TS_FILE    = "/tmp/.mondrian_stop"
+BLOCKED_TS_FILE = "/tmp/.mondrian_blocked"
+
+_FS_CHECK = (
+    "osascript -e "
+    "'tell application \"iTerm2\" to is full screen of current window' "
+    "2>/dev/null | grep -q true"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,34 +50,81 @@ def _join(*parts: str) -> str:
 # Per-event command builders
 # ---------------------------------------------------------------------------
 
-def _active_cmd(colors: dict, alpha: Optional[float] = None) -> str:
-    parts = [_send_seq(_colors_seq(**colors))]
-    if alpha is not None:
-        parts.append(_transparency_stmt(alpha))
-    return _join(*parts)
+def _active_cmd(
+    colors: dict,
+    alpha: Optional[float] = None,
+    fullscreen_colors: Optional[dict] = None,
+) -> str:
+    """
+    UserPromptSubmit / PreToolUse hook.
+    If transparency is configured, wraps the AppleScript call in a full-screen
+    guard — iTerm2 full-screen windows have no background to show through, so
+    we skip the opacity change and optionally use a different color instead
+    (fullscreen_colors, for Direction D where active == waiting).
+    """
+    send = _send_seq(_colors_seq(**colors))
+    if alpha is None:
+        return _join(send)
+
+    fs_send = _send_seq(_colors_seq(**(fullscreen_colors or colors)))
+    windowed = f"{send}; {_transparency_stmt(alpha)}"
+    return (
+        f"if {_FS_CHECK}; "
+        f"then {fs_send}; "
+        f"else {windowed}; fi # Mondrian"
+    )
 
 
 def _restore_cmd(colors: dict, alpha: Optional[float] = None) -> str:
     """Stop hook: stamp the time so Notification can detect end-of-response."""
-    parts = [
-        f"echo $(date +%s) > {STOP_TS_FILE}",
-        _send_seq(_colors_seq(**colors)),
-    ]
-    if alpha is not None:
-        parts.append(_transparency_stmt(alpha))
-    return _join(*parts)
+    stamp = f"echo $(date +%s) > {STOP_TS_FILE}"
+    send  = _send_seq(_colors_seq(**colors))
+    if alpha is None:
+        return _join(stamp, send)
+
+    # Full-screen: stamp + colors (skip transparency — no background to show)
+    windowed   = f"{stamp}; {send}; {_transparency_stmt(alpha)}"
+    fullscreen = f"{stamp}; {send}"
+    return (
+        f"if {_FS_CHECK}; "
+        f"then {fullscreen}; "
+        f"else {windowed}; fi # Mondrian"
+    )
 
 
-def _blocked_cmd(colors: dict, alpha: Optional[float] = None, grace: int = 3) -> str:
-    """Notification hook: only show blocked if Stop fired >grace seconds ago.
-    This filters out the spurious Notification that fires right after Stop
-    at the end of normal responses."""
-    seq  = _colors_seq(**colors)
-    send = _send_seq(seq)
-    inner_parts = [send]
-    if alpha is not None:
-        inner_parts.append(_transparency_stmt(alpha))
-    inner = "; ".join(inner_parts)
+def _blocked_cmd(
+    colors: dict,
+    waiting_colors: Optional[dict] = None,
+    grace: int = 3,
+    expire: int = 0,
+) -> str:
+    """
+    Notification hook: only show blocked if Stop fired >grace seconds ago
+    (filters the spurious Notification at the end of normal responses).
+
+    If expire > 0, a background subshell auto-restores waiting colors after
+    that many seconds — unless Stop or a new UserPromptSubmit has fired in
+    the meantime.  This clears the red state automatically when the user is
+    composing a reply and hasn't submitted yet.
+    """
+    send = _send_seq(_colors_seq(**colors))
+
+    if expire > 0 and waiting_colors is not None:
+        w_send = _send_seq(_colors_seq(**waiting_colors))
+        # Write a unique timestamp so the subshell can tell if a newer
+        # Notification has fired (invalidating this one).
+        inner = (
+            f"NOW=$(date +%s); "
+            f"echo $NOW > {BLOCKED_TS_FILE}; "
+            f"{send}; "
+            f"(sleep {expire}; "
+            f"BT=$(cat {BLOCKED_TS_FILE} 2>/dev/null||echo 0); "
+            f"ST=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
+            f'[ "$BT" = "$NOW" ] && [ $ST -lt $BT ] && {w_send}) &'
+        )
+    else:
+        inner = send
+
     return (
         f"ts=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
         f"[ $(($(date +%s)-ts)) -gt {grace} ] && "
@@ -169,11 +223,29 @@ def install_hooks(
     if active_alpha  is None: active_alpha  = tr.get("active")
     if waiting_alpha is None: waiting_alpha = tr.get("waiting")
 
+    # Full-screen fallback for active state (only matters when transparency is on).
+    # For Direction D (active bg == waiting bg), transparency is the only signal —
+    # derive a Direction-B-style color so full-screen mode still shows something.
+    # For A/B/C, the color already shifts; just skip the transparency call.
+    fullscreen_active = config.get("fullscreen_active_colors")
+    if fullscreen_active is None and active_alpha is not None:
+        if active_colors.get("bg") == waiting_colors.get("bg"):
+            from .colors import derive_palette
+            palette_dirs = derive_palette(hex_to_srgb(waiting_colors["bg"]))
+            fullscreen_active = derive_state_colors(
+                palette_dirs["B"]["active"], fg_base, selbg_base
+            )
+        else:
+            fullscreen_active = active_colors   # color change already visible
+
+    # Auto-expire blocked state (0 = disabled)
+    blocked_expire = config.get("blocked_expire", 0)
+
     hook_commands = {
-        "UserPromptSubmit": _active_cmd(active_colors,  active_alpha),
-        "PreToolUse":       _active_cmd(active_colors,  active_alpha),  # restores active after permission grant
+        "UserPromptSubmit": _active_cmd(active_colors, active_alpha, fullscreen_active),
+        "PreToolUse":       _active_cmd(active_colors, active_alpha, fullscreen_active),
         "Stop":             _restore_cmd(waiting_colors, waiting_alpha),
-        "Notification":     _blocked_cmd(blocked_colors),  # color only, transparency unchanged
+        "Notification":     _blocked_cmd(blocked_colors, waiting_colors, expire=blocked_expire),
     }
 
     settings = _load_settings()

@@ -141,6 +141,21 @@ def cmd_configure() -> None:
     if transparency_config:
         config_data["transparency"] = transparency_config
 
+    # Optional: auto-expire the blocked/red state after N seconds
+    print()
+    try:
+        raw = input(
+            "  Auto-clear blocked/red after N seconds? [e.g. 90, or Enter to skip]: "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+    if raw:
+        try:
+            config_data["blocked_expire"] = max(10, int(raw))
+            print(f"  Blocked state will auto-clear after {config_data['blocked_expire']}s.")
+        except ValueError:
+            pass
+
     # Persist config first so install_hooks reads the correct palette
     _save_config(config_data)
 
@@ -342,9 +357,10 @@ def cmd_reset() -> None:
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
 
-    stop_ts = Path("/tmp/.mondrian_stop")
-    if stop_ts.exists():
-        stop_ts.unlink()
+    for tmp in ("/tmp/.mondrian_stop", "/tmp/.mondrian_blocked"):
+        p = Path(tmp)
+        if p.exists():
+            p.unlink()
 
     print("  Hooks removed, config deleted.")
     print()
