@@ -212,24 +212,78 @@ def cmd_status() -> None:
     print()
 
 
-def cmd_uninstall() -> None:
-    from lib.iterm import remove_dynamic_profiles, PROFILE_FILE
+def _restore_terminal_now(config: dict) -> None:
+    """Send the waiting-state colors and transparency to the live terminal immediately."""
+    import subprocess
+
+    if "waiting_colors" in config:
+        c = config["waiting_colors"]
+    else:
+        fg    = config.get("fg",    "#101010")
+        selbg = config.get("selbg", "#B3D7FF")
+        selfg = config.get("selfg", "#000000")
+        c = {
+            "bg":    config.get("palette", {}).get("waiting", "#FAFAFA"),
+            "fg":    fg,
+            "bold":  fg,
+            "selbg": selbg,
+            "selfg": selfg,
+        }
+
+    def s(h): return h.lstrip("#")
+    seq = (
+        f"\\033]1337;SetColors="
+        f"bg={s(c['bg'])},fg={s(c['fg'])},bold={s(c['bold'])},"
+        f"selbg={s(c['selbg'])},selfg={s(c['selfg'])}\\007"
+    )
+    subprocess.run(
+        f"printf '{seq}' > /dev/tty 2>/dev/null || printf '{seq}' >&2",
+        shell=True,
+    )
+
+    waiting_alpha = (config.get("transparency") or {}).get("waiting")
+    if waiting_alpha is not None:
+        subprocess.run(
+            ["osascript", "-e",
+             f"tell application \"iTerm2\" to tell current session of "
+             f"current window to set transparency to {waiting_alpha:.3f}"],
+            capture_output=True,
+        )
+
+
+def cmd_reset() -> None:
+    from lib.iterm import remove_dynamic_profiles
     from lib.hooks import uninstall_hooks
+
+    config = _load_config()
+
+    if config:
+        _restore_terminal_now(config)
+        print("  Colors restored.")
 
     remove_dynamic_profiles()
     uninstall_hooks()
+
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
 
-    print("  Mondrian removed.")
-    print("  Restart iTerm2 or switch profiles manually to restore your default.")
+    stop_ts = Path("/tmp/.mondrian_stop")
+    if stop_ts.exists():
+        stop_ts.unlink()
+
+    print("  Hooks removed, config deleted.")
     print()
+
+
+def cmd_uninstall() -> None:
+    cmd_reset()
 
 
 COMMANDS = {
     "configure": cmd_configure,
     "apply":     cmd_apply,
     "status":    cmd_status,
+    "reset":     cmd_reset,
     "uninstall": cmd_uninstall,
 }
 
