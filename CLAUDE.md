@@ -26,7 +26,8 @@ Colors are set via iTerm2's `SetColors` OSC escape sequence. Transparency is opt
 |---|---|
 | `mondrian.py` | CLI entrypoint. All commands live here as `cmd_*` functions. |
 | `lib/colors.py` | Color math (sRGB↔HSL), palette derivation, swatch rendering, `.itermcolors` loading |
-| `lib/chat.py` | Interactive palette picker TUI (directions A–E, hex overrides) |
+| `lib/chat.py` | Phase-by-phase configure flow (Normal → Processing → Blocked → Transparency → Review) |
+| `lib/picker.py` | Hue grid picker, closest-scheme search, `pick_state_color()`, ANSI swatch helpers |
 | `lib/browse.py` | Full-screen scheme browser TUI (raw termios, arrow keys, bookmark toggle) |
 | `lib/fetch.py` | Remote fetch from mbadolato/iTerm2-Color-Schemes, local library management, favorites |
 | `lib/hooks.py` | Builds hook shell commands, reads/writes `~/.claude/settings.json` |
@@ -94,22 +95,24 @@ All hook commands are single shell one-liners stored in `~/.claude/settings.json
 
 ```
 Terminal bg (OSC 11 query)
-  → srgb_to_hsl()
-  → derive_palette()  →  4 directions (A/B/C/D) + custom (E)
-  → user picks direction
-  → derive_state_colors(bg)  →  {bg, fg, bold, selbg, selfg} hex dict per state
+  → configure_phases() in lib/chat.py
+  → Phase 1: Normal — show current colors, optional customize
+  → Phase 2: Processing — pick_state_color() (hue grid → closest schemes → select)
+  → Phase 3: Blocked — same picker, or disable blocked indicator entirely
+  → Phase 4: Transparency — optional fade while Claude works
+  → Review + confirm
   → install_hooks()  →  bakes hex values into shell one-liners in settings.json
 ```
 
-For custom `.itermcolors` mode (direction E):
+`pick_state_color()` flow (in `lib/picker.py`):
 ```
-User picks .itermcolors files (waiting / active / blocked)
-  → load_itermcolors()  →  {bg, fg, bold, selbg, selfg} read directly from plist
-  → stored in ~/.mondrian.json as waiting_colors / active_colors / blocked_colors
-  → install_hooks() reads these directly, bypasses derive_state_colors()
+Hue grid (9 hues + custom hex + Enter=auto)
+  → bg_distance() scores all schemes by color proximity to chosen hue
+  → top 6 closest shown with text swatches + hex
+  → user picks 1-6, or [j] just use the hex, or [m] full browser, or [b] back
 ```
 
-`install_hooks()` checks for `*_colors` keys in config first and uses them if present; falls back to deriving from `palette.waiting/active/blocked` hex strings for standard A–D directions.
+`install_hooks()` always reads `*_colors` dicts from config (all three states always stored as full dicts since the interactive configure redesign).
 
 ---
 
@@ -128,50 +131,74 @@ Mondrian-managed profiles (`Mondrian-Waiting`, `Mondrian-Active`, `Mondrian-Bloc
 
 ## Config format (`~/.mondrian.json`)
 
-### Standard mode (directions A–D)
+All configs written since the interactive-picker redesign use full color dicts for all three states:
+
 ```json
 {
   "source_profile": {"guid": "...", "name": "My Profile"},
   "palette": {
-    "direction": "cool-blue + rose (contrast)",
+    "direction": "interactive",
     "waiting": "#15191E",
-    "active":  "#1A2535",
-    "blocked": "#3D1A1A"
+    "active":  "#2E3440",
+    "blocked": "#762423"
   },
-  "fg":    "#D7DFEA",
-  "selbg": "#6798D5",
-  "selfg": "#111111",
-  "transparency": {"waiting": 0.0, "active": 0.35}
+  "waiting_colors": {"bg": "#15191E", "fg": "#DCDCDC", "bold": "#DCDCDC", "selbg": "#B3D7FF", "selfg": "#000000"},
+  "active_colors":  {"bg": "#2E3440", "fg": "#CDCECF", "bold": "#CDCECF", "selbg": "#3E4A5B", "selfg": "#CDCECF"},
+  "blocked_colors": {"bg": "#762423", "fg": "#FFFFFF",  "bold": "#FF9C44", "selbg": "#073642", "selfg": "#FFFFFF"},
+  "fg":    "#DCDCDC",
+  "selbg": "#B3D7FF",
+  "selfg": "#000000",
+  "transparency":    {"waiting": 0.0, "active": 0.35},
+  "blocked_enabled": true,
+  "blocked_expire":  90
 }
 ```
 
-### Custom .itermcolors mode (direction E)
-Same as above, plus full color dicts:
-```json
-{
-  "waiting_colors": {"bg": "#15191E", "fg": "#D7DFEA", "bold": "#D7DFEA", "selbg": "#6798D5", "selfg": "#111111"},
-  "active_colors":  {"bg": "...", ...},
-  "blocked_colors": {"bg": "...", ...}
-}
-```
+Optional keys:
+- `transparency` — omit to disable fade entirely
+- `blocked_enabled: false` — omit the Notification hook entirely (no red state)
+- `blocked_expire` — seconds before blocked state auto-clears (0 = off)
 
-`install_hooks()` uses `*_colors` dicts directly when present, so the exact per-state fg/bold/selbg/selfg from the `.itermcolors` file is preserved.
+`install_hooks()` always reads `*_colors` dicts when present. The `palette.waiting/active/blocked` bg hex strings are kept for quick `mondrian status` display and legacy `mondrian apply` fallback.
 
 ---
 
-## Palette directions
+## Phase-by-phase configure flow
 
-| Direction | Active | Blocked | Notes |
-|---|---|---|---|
-| A | Cool blue-gray (subtle) | Warm amber | Default |
-| B | Cool blue-gray (more) | Rose/red | More contrast |
-| C | Very subtle cool | Soft lavender | Softest |
-| D | Same as waiting | Rose/red | Transparency-only — requires fade |
-| E | Custom `.itermcolors` | Custom `.itermcolors` | Full per-state color control |
+`configure_phases()` in `lib/chat.py`:
 
-Direction D requires transparency because there's no color delta — opacity is the only signal.
+1. **Normal** — shows current terminal swatches; optional "Customize?" prompt
+2. **Processing** — `pick_state_color()` (hue grid → scheme search → select/browse/hex)
+3. **Blocked** — "Enable blocked indicator? [Y/n]" → same picker if yes; if no, Notification hook is not installed and blocked_enabled=false is stored
+4. **Transparency** — optional fade; required if processing == waiting (otherwise no visible signal)
+5. **Review + confirm** — swatches for all three states side by side
 
-Dark terminal backgrounds are handled by flipping the lightness delta direction in `derive_palette()`: instead of subtracting from L, dark mode adds to L so the active/blocked states are visibly brighter than the baseline.
+`pick_state_color()` in `lib/picker.py`:
+- Hue grid: 9 named hues (1–9) + `h` for raw hex + Enter for auto-derive
+- After picking a hue, loads all schemes from `~/.mondrian/schemes/` + iTerm2 Custom Color Presets
+- Ranks by `bg_distance()` — type-aware (gray vs colored penalty of 2.5 prevents achromatic false matches)
+- Shows top 6 with text swatches; also [j] just use this hex, [m] full browser, [b] back
+
+---
+
+## In-session configuration
+
+Mondrian settings can be changed live from within a Claude Code session without running `mondrian configure`. The user can ask Claude to make changes and Claude will:
+
+1. Read `~/.mondrian.json`
+2. Edit the relevant fields (hex values in `*_colors`, `transparency`, `blocked_enabled`, `blocked_expire`, etc.)
+3. Run `python /path/to/mondrian.py apply` — which re-installs hooks and updates Dynamic Profiles
+4. Changes take effect on the next prompt/tool event
+
+Common in-session requests and what to change:
+- "set processing color to X" → edit `active_colors` bg (and derive new fg/bold/selbg/selfg via `derive_state_colors`) + `palette.active`
+- "set blocked color to X" → edit `blocked_colors` similarly + `palette.blocked`
+- "turn off blocked indicator" → set `blocked_enabled: false`, `mondrian apply` removes the Notification hook
+- "set active transparency to 40%" → `transparency.active = 0.40`
+- "turn off transparency" → remove `transparency` key entirely
+- "auto-clear blocked after 60s" → `blocked_expire: 60`
+
+After editing the JSON, always run `mondrian apply` (or call `install_hooks()` + `write_dynamic_profiles()` directly) to push the changes to the live hooks.
 
 ---
 
@@ -261,11 +288,6 @@ Keybindings: `↑↓` / `jk` navigate, `Enter`/`Space` toggle bookmark, `PgUp`/`
 3. The existing install/uninstall loop handles any event name automatically (it iterates the dict)
 4. Re-run `mondrian apply` to push the new hook to `~/.claude/settings.json`
 
-## Adding a new palette direction
-
-1. Add the direction letter and its `{waiting, active, blocked, label}` dict to the `return` statement in `derive_palette()` in `lib/colors.py`
-2. Update the `valid = set(directions.keys()) | {"E"}` line in `pick_direction_interactively()` in `lib/chat.py` — it's automatic if you add to the dict, but update the prompt string too
-
 ---
 
 ## FAQ
@@ -286,10 +308,10 @@ AppleScript access to iTerm2 is required. Check System Settings → Privacy & Se
 The 3-second timing guard requires that `Stop` fires at least 3 seconds before `Notification`. If Claude responds very quickly and then sends a notification, the guard suppresses it. This is intentional — it filters end-of-response noise. Genuine "I need input" blocks (tool permissions, questions) fire the notification well after Stop.
 
 **Q: How do I change my colors without reconfiguring everything?**  
-Edit `~/.mondrian.json` directly (change the hex values in `palette` or `*_colors`), then run `mondrian apply`.
+Run `mondrian edit` for an interactive tweak menu. Or ask Claude Code directly ("change my processing color to Tokyo Night") — it'll edit `~/.mondrian.json` and run `mondrian apply`. Or edit the JSON manually and run `mondrian apply`.
 
 **Q: How do I use a .itermcolors file I already have?**  
-Run `mondrian configure`, pick `E` at the direction prompt, and enter the file path (tab-complete works). Or copy the file to `~/.mondrian/schemes/` and it'll appear in the library.
+Copy it to `~/.mondrian/schemes/` and it'll appear in the scheme picker next time you run `mondrian configure` or `mondrian edit`. Or run `mondrian configure` and pick from the browser.
 
 **Q: `mondrian fetch` is slow / hitting rate limits.**  
 The GitHub Contents API has a 60 req/hour unauthenticated limit, but `fetch --all` only makes one API call (to list schemes) then fetches files directly from `raw.githubusercontent.com` — no rate limit issue there. If it's slow, it's network latency over ~500 files.

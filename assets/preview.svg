@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="480" viewBox="0 0 880 480">
+  <defs>
+    <style>
+      .mono { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace; }
+      .label { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
+               font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; font-size: 9.5px; }
+    </style>
+  </defs>
+
+  <!-- Mondrian black grid -->
+  <rect width="880" height="480" fill="#111111"/>
+
+  <!-- ── Panels ────────────────────────────────────────────────────── -->
+
+  <!-- Waiting (left, full height) -->
+  <rect x="8" y="8" width="508" height="464" fill="#15191E"/>
+
+  <!-- Processing (top right) -->
+  <rect x="524" y="8" width="348" height="232" fill="#2E3440"/>
+
+  <!-- Blocked (bottom right) -->
+  <rect x="524" y="248" width="348" height="224" fill="#762423"/>
+
+
+  <!-- ── WAITING content ──────────────────────────────────────────── -->
+
+  <text x="32" y="41" class="label" fill="#DCDCDC" opacity="0.35">Waiting</text>
+  <line x1="32" y1="50" x2="492" y2="50" stroke="#DCDCDC" stroke-width="0.5" opacity="0.12"/>
+
+  <!-- prompt -->
+  <text x="32" y="83"  class="mono" font-size="13" fill="#5A8FC4">$</text>
+  <text x="46" y="83"  class="mono" font-size="13" fill="#DCDCDC"> mondrian</text>
+
+  <!-- previous exchange -->
+  <text x="32" y="122" class="mono" font-size="12.5" fill="#DCDCDC" opacity="0.45">You:  refactor the auth module</text>
+
+  <text x="32" y="161" class="mono" font-size="12.5" fill="#DCDCDC">Done. Moved session logic into</text>
+  <text x="32" y="180" class="mono" font-size="12.5" fill="#DCDCDC">SessionManager, extracted token</text>
+  <text x="32" y="199" class="mono" font-size="12.5" fill="#DCDCDC">validation into a helper, and</text>
+  <text x="32" y="218" class="mono" font-size="12.5" fill="#DCDCDC">updated all call sites.</text>
+
+  <!-- file summary -->
+  <text x="32" y="253" class="mono" font-size="12.5" fill="#DCDCDC" opacity="0.55">Files changed:</text>
+  <text x="32" y="272" class="mono" font-size="12.5" fill="#5A8FC4">  src/auth.ts</text>
+  <text x="170" y="272" class="mono" font-size="12.5" fill="#DCDCDC" opacity="0.5">    +28  −41</text>
+  <text x="32" y="291" class="mono" font-size="12.5" fill="#5A8FC4">  src/session.ts</text>
+  <text x="178" y="291" class="mono" font-size="12.5" fill="#DCDCDC" opacity="0.5">  +85   −0</text>
+
+  <text x="32" y="330" class="mono" font-size="12.5" fill="#DCDCDC" opacity="0.45">Let me know if you'd like tests.</text>
+
+  <!-- cursor -->
+  <text x="32" y="370" class="mono" font-size="13" fill="#5A8FC4">$</text>
+  <text x="46" y="370" class="mono" font-size="13" fill="#DCDCDC"> </text>
+  <rect x="58" y="356" width="8" height="15" fill="#DCDCDC" opacity="0.8"/>
+
+  <!-- wordmark bottom-left -->
+  <text x="32" y="454" class="label" fill="#DCDCDC" opacity="0.18" font-size="11" letter-spacing="0.2em">mondrian</text>
+
+
+  <!-- ── PROCESSING content ───────────────────────────────────────── -->
+
+  <text x="544" y="41" class="label" fill="#CDCECF" opacity="0.35">Processing</text>
+  <line x1="544" y1="50" x2="856" y2="50" stroke="#CDCECF" stroke-width="0.5" opacity="0.12"/>
+
+  <text x="544" y="83"  class="mono" font-size="12.5" fill="#CDCECF" opacity="0.45">You:  write unit tests</text>
+
+  <!-- tool lines -->
+  <text x="544" y="118" class="mono" font-size="12.5" fill="#5A8FC4">◆</text>
+  <text x="562" y="118" class="mono" font-size="12.5" fill="#CDCECF"> Reading src/auth.ts</text>
+
+  <text x="544" y="139" class="mono" font-size="12.5" fill="#5A8FC4">◆</text>
+  <text x="562" y="139" class="mono" font-size="12.5" fill="#CDCECF"> Writing src/auth.test.ts</text>
+
+  <!-- partial output -->
+  <text x="544" y="176" class="mono" font-size="12" fill="#CDCECF" opacity="0.5">describe('auth', () => {</text>
+  <text x="544" y="194" class="mono" font-size="12" fill="#CDCECF" opacity="0.5">  it('rejects bad token',</text>
+  <text x="544" y="212" class="mono" font-size="12" fill="#CDCECF" opacity="0.35">    async () => {…</text>
+
+  <!-- spinner -->
+  <circle cx="844" cy="32" r="5" fill="none" stroke="#CDCECF" stroke-width="1.5" opacity="0.3"/>
+  <path d="M 844 27 A 5 5 0 0 1 849 32" stroke="#CDCECF" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+
+  <!-- ── BLOCKED content ──────────────────────────────────────────── -->
+
+  <text x="544" y="281" class="label" fill="#FFFFFF" opacity="0.35">Blocked</text>
+  <line x1="544" y1="290" x2="856" y2="290" stroke="#FFFFFF" stroke-width="0.5" opacity="0.12"/>
+
+  <!-- warning -->
+  <text x="544" y="325" class="mono" font-size="13" fill="#FF9C44" font-weight="bold">⚠  Tool permission needed</text>
+
+  <text x="544" y="358" class="mono" font-size="12.5" fill="#FFFFFF" opacity="0.65">Write to src/auth.test.ts</text>
+
+  <!-- prompt line -->
+  <text x="544" y="398" class="mono" font-size="12.5" fill="#FFFFFF">[y] Allow</text>
+  <text x="648" y="398" class="mono" font-size="12.5" fill="#FFFFFF" opacity="0.5">  [n] Skip  [a] Always</text>
+
+  <!-- cursor -->
+  <rect x="544" y="418" width="8" height="15" fill="#FFFFFF" opacity="0.7"/>
+
+</svg>

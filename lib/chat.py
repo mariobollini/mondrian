@@ -158,13 +158,23 @@ def configure_phases(profile: dict) -> "tuple | None":
         "Fires when Claude needs your approval to use a tool or read a file.",
     )
 
-    blocked_colors = pick_state_color(
-        "Blocked", schemes, favorites, waiting_colors, dark_mode,
-        hint="red [1]",
-    )
-    if blocked_colors is None:
-        blocked_colors = auto_blocked(waiting_colors)
-        print(f"  Auto-derived  →  {blocked_colors['bg']}\n")
+    try:
+        raw = input("  Enable blocked indicator? [Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+    blocked_enabled = raw != "n"
+
+    if blocked_enabled:
+        blocked_colors = pick_state_color(
+            "Blocked", schemes, favorites, waiting_colors, dark_mode,
+            hint="red [1]",
+        )
+        if blocked_colors is None:
+            blocked_colors = auto_blocked(waiting_colors)
+            print(f"  Auto-derived  →  {blocked_colors['bg']}\n")
+    else:
+        blocked_colors = dict(waiting_colors)
+        print(f"  Blocked indicator disabled.\n")
 
     # ── Phase 4: Transparency ────────────────────────────────────────────
     transparency_required = waiting_colors["bg"] == active_colors["bg"]
@@ -179,4 +189,4 @@ def configure_phases(profile: dict) -> "tuple | None":
         print("  Cancelled.\n")
         return None
 
-    return waiting_colors, active_colors, blocked_colors, transparency_config
+    return waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled

@@ -266,17 +266,31 @@ def install_hooks(
             fullscreen_active = active_colors   # color change already visible
 
     # Auto-expire blocked state (0 = disabled)
-    blocked_expire = config.get("blocked_expire", 0)
+    blocked_expire  = config.get("blocked_expire",  0)
+    blocked_enabled = config.get("blocked_enabled", True)
 
     hook_commands = {
         "UserPromptSubmit": _active_cmd(active_colors, active_alpha, fullscreen_active, reset_stop=True),
         "PreToolUse":       _active_cmd(active_colors, active_alpha, fullscreen_active),
         "Stop":             _restore_cmd(waiting_colors, waiting_alpha),
-        "Notification":     _blocked_cmd(blocked_colors, waiting_colors, expire=blocked_expire, waiting_alpha=waiting_alpha),
     }
+    if blocked_enabled:
+        hook_commands["Notification"] = _blocked_cmd(
+            blocked_colors, waiting_colors, expire=blocked_expire, waiting_alpha=waiting_alpha
+        )
 
     settings = _load_settings()
     hooks    = settings.setdefault("hooks", {})
+
+    # If blocked is disabled, remove any existing Mondrian Notification hook.
+    if not blocked_enabled:
+        if "Notification" in hooks:
+            hooks["Notification"] = [
+                e for e in hooks["Notification"]
+                if MONDRIAN_MARKER not in e.get("hooks", [{}])[0].get("command", "")
+            ]
+            if not hooks["Notification"]:
+                del hooks["Notification"]
 
     for event, command in hook_commands.items():
         entries = hooks.setdefault(event, [])

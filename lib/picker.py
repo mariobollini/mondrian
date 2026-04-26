@@ -125,19 +125,21 @@ def closest_schemes(target_hex: str, schemes: list, n: int = 6) -> list:
 # ---------------------------------------------------------------------------
 
 def print_hue_grid(dark_mode: bool = True) -> None:
-    """Two rows of 4 + 5 hue swatches with key labels."""
-    rows = [HUES[:4], HUES[4:]]
-    for row in rows:
-        sw_line  = "  "
-        lbl_line = "  "
+    """
+    Two rows of 4 swatches, then a row with Gray + shortcut hints.
+    Label sits on the same line as the swatch so ANSI widths can't misalign.
+    """
+    for row in [HUES[:4], HUES[4:8]]:
+        line = "  "
         for label, hf, key in row:
             color = _hue_display_hex(hf, dark_mode)
-            sw_line  += f"[{key}] {_swatch(color, 5)}  "
-            lbl_line += f"    {label:<11}"
-        print(sw_line)
-        print(lbl_line)
-    print()
-    print("  [h] Custom hex     [Enter] Auto-derive")
+            line += f"[{key}] {_swatch(color, 5)} {label:<8}"
+        print(line)
+
+    # Last row: Gray swatch + shortcut hints inline
+    label, hf, key = HUES[8]
+    color = _hue_display_hex(hf, dark_mode)
+    print(f"  [{key}] {_swatch(color, 5)} {label:<8}  [h] Custom hex     [Enter] Auto-derive")
     print()
 
 

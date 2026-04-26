@@ -69,8 +69,18 @@ def _print_done_summary(dp_path: Path, shell_rc: "Path | None") -> None:
 
     print()
     print("  To undo everything:  mondrian reset")
+    print("  To tweak colors:     mondrian edit")
     print()
     print("  Open a new iTerm2 tab or window to activate.")
+    print()
+    print("  ── In-session editing ────────────────────────────────────────────")
+    print()
+    print("  You can also change settings by asking Claude Code directly:")
+    print('  "set my processing color to Tokyo Night"')
+    print('  "turn off the blocked indicator"')
+    print('  "change active transparency to 40%"')
+    print()
+    print("  Claude will edit ~/.mondrian.json and run mondrian apply for you.")
     print()
 
 
@@ -135,10 +145,22 @@ def cmd_configure() -> None:
     print(f"  Background : {srgb_to_hex(*profile['bg'])}")
     print(f"  Foreground : {srgb_to_hex(*profile['fg'])}")
 
+    # Establish waiting colors as the session default so \033[0m restores the
+    # right fg/bg during the picker (avoids the "font color shift" artifact).
+    _restore_terminal_now({
+        "waiting_colors": {
+            "bg":    srgb_to_hex(*profile["bg"]),
+            "fg":    srgb_to_hex(*profile["fg"]),
+            "bold":  srgb_to_hex(*profile["fg"]),
+            "selbg": srgb_to_hex(*profile["selbg"]),
+            "selfg": srgb_to_hex(*profile["selfg"]),
+        }
+    })
+
     result = configure_phases(profile)
     if result is None:
         return
-    waiting_colors, active_colors, blocked_colors, transparency_config = result
+    waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled = result
 
     # Optional: auto-clear blocked state after N seconds
     print()
@@ -176,6 +198,8 @@ def cmd_configure() -> None:
         config_data["transparency"] = transparency_config
     if blocked_expire:
         config_data["blocked_expire"] = blocked_expire
+    if not blocked_enabled:
+        config_data["blocked_enabled"] = False
 
     _save_config(config_data)
 
@@ -206,7 +230,127 @@ def cmd_configure() -> None:
     else:
         print("  Shell focus hook already installed.")
 
+    # Snap terminal to the newly configured waiting colors immediately.
+    _restore_terminal_now(config_data)
+
     _print_done_summary(dp_path, shell_rc)
+
+
+def cmd_edit() -> None:
+    from lib.iterm import write_dynamic_profiles, query_terminal_transparency
+    from lib.hooks import install_hooks
+    from lib.chat import _get_all_schemes, _pick_transparency
+    from lib.colors import srgb_to_hex, hex_to_srgb, srgb_to_hsl
+    from lib.picker import pick_state_color
+
+    config = _load_config()
+    if not config:
+        print("\n  No config found. Run: mondrian configure\n")
+        return
+
+    _schemes = _favs = None
+
+    def _get_schemes():
+        nonlocal _schemes, _favs
+        if _schemes is None:
+            _schemes, _favs = _get_all_schemes()
+        return _schemes, _favs
+
+    def _dark():
+        wc = config.get("waiting_colors", {})
+        return srgb_to_hsl(*hex_to_srgb(wc.get("bg", "#FAFAFA")))[2] < 0.5
+
+    while True:
+        wc  = config.get("waiting_colors",  {})
+        ac  = config.get("active_colors",   {})
+        bc  = config.get("blocked_colors",  {})
+        tr  = config.get("transparency") or {}
+        be  = config.get("blocked_enabled", True)
+        exp = config.get("blocked_expire",  0)
+
+        tr_str  = f"{tr.get('active', 0):.0%} while processing" if tr else "off"
+        exp_str = f"{exp}s" if exp else "off"
+        be_str  = "on" if be else "off"
+
+        print()
+        print("  ── Edit ──────────────────────────────────────────────────────────")
+        print(f"  [1] Processing color  {ac.get('bg', '—')}")
+        print(f"  [2] Blocked color     {bc.get('bg', '—')}  [blocked: {be_str}]")
+        print(f"  [3] Toggle blocked    currently {be_str}")
+        print(f"  [4] Transparency      {tr_str}")
+        print(f"  [5] Auto-clear        {exp_str}")
+        print()
+        print("  [a] Apply and save")
+        print("  [q] Quit without saving")
+        print()
+
+        try:
+            raw = input("  > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if raw == "q":
+            return
+
+        if raw == "1":
+            sc, fav = _get_schemes()
+            picked = pick_state_color("Processing", sc, fav, wc, _dark(), hint="blue [6]")
+            if picked:
+                config["active_colors"]    = picked
+                config["palette"]["active"] = picked["bg"]
+
+        elif raw == "2":
+            sc, fav = _get_schemes()
+            picked = pick_state_color("Blocked", sc, fav, wc, _dark(), hint="red [1]")
+            if picked:
+                config["blocked_colors"]     = picked
+                config["palette"]["blocked"] = picked["bg"]
+                config["blocked_enabled"]    = True
+
+        elif raw == "3":
+            be = not be
+            config["blocked_enabled"] = be
+            print(f"  Blocked indicator {'enabled' if be else 'disabled'}.")
+
+        elif raw == "4":
+            tr_new = _pick_transparency(query_terminal_transparency)
+            if tr_new:
+                config["transparency"] = tr_new
+            else:
+                config.pop("transparency", None)
+                print("  Transparency off.")
+
+        elif raw == "5":
+            try:
+                v = input("  Seconds before auto-clear (0 = off): ").strip()
+                n = int(v)
+                if n <= 0:
+                    config.pop("blocked_expire", None)
+                    print("  Auto-clear disabled.")
+                else:
+                    n = max(10, n)
+                    config["blocked_expire"] = n
+                    print(f"  Will auto-clear after {n}s.")
+            except (ValueError, EOFError, KeyboardInterrupt):
+                pass
+
+        elif raw == "a":
+            _save_config(config)
+            install_hooks()
+            guid = config.get("source_profile", {}).get("guid")
+            if guid and "waiting_colors" in config:
+                dp = write_dynamic_profiles(
+                    parent_guid=guid,
+                    waiting=hex_to_srgb(config["waiting_colors"]["bg"]),
+                    active= hex_to_srgb(config["active_colors"]["bg"]),
+                    blocked=hex_to_srgb(config["blocked_colors"]["bg"]),
+                    fg=    hex_to_srgb(config["waiting_colors"]["fg"]),
+                )
+                print(f"  Dynamic profiles updated: {dp}")
+            _restore_terminal_now(config)
+            print("  Applied.\n")
+            return
 
 
 def cmd_apply() -> None:
@@ -428,6 +572,7 @@ def cmd_browse() -> None:
 
 COMMANDS = {
     "configure": cmd_configure,
+    "edit":      cmd_edit,
     "apply":     cmd_apply,
     "status":    cmd_status,
     "fetch":     cmd_fetch,
@@ -442,9 +587,10 @@ def _show_menu() -> None:
     state  = "configured ✓" if config else "not configured"
     print(f"\n  mondrian  —  iTerm2 colorizer for Claude Code  ({state})\n")
     print("  [1] Configure    set up color states for Claude Code")
-    print("  [2] Browse       explore schemes, manage bookmarks")
-    print("  [3] Status       show current setup")
-    print("  [4] Reset        remove all mondrian config")
+    print("  [2] Edit         tweak processing/blocked colors, transparency")
+    print("  [3] Browse       explore schemes, manage bookmarks")
+    print("  [4] Status       show current setup")
+    print("  [5] Reset        remove all mondrian config")
     print()
     try:
         raw = input("  > ").strip()
@@ -452,7 +598,7 @@ def _show_menu() -> None:
         print()
         return
 
-    {"1": cmd_configure, "2": cmd_browse, "3": cmd_status, "4": cmd_reset}.get(raw, lambda: None)()
+    {"1": cmd_configure, "2": cmd_edit, "3": cmd_browse, "4": cmd_status, "5": cmd_reset}.get(raw, lambda: None)()
 
 
 def main() -> None:
