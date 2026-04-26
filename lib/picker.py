@@ -35,8 +35,11 @@ _VALID_KEYS = {h[2] for h in HUES} | {"h", ""}
 # Swatch helper (small inline swatches for the hue grid)
 # ---------------------------------------------------------------------------
 
-def _swatch(hex_color: str, width: int = 5) -> str:
-    return f"{_ansi_bg(hex_color)}{' ' * width}{RESET}"
+def _swatch(hex_color: str, width: int = 5, dark_mode: bool = True) -> str:
+    # █ full-block glyph: foreground-drawn so unaffected by bg color overrides
+    bdr_fg = "\033[38;2;190;195;210m" if dark_mode else "\033[38;2;70;75;85m"
+    bdr = f"{bdr_fg}█{RESET}"
+    return f"{bdr}{_ansi_bg(hex_color)}{' ' * width}{RESET}{bdr}"
 
 
 # ---------------------------------------------------------------------------
@@ -109,12 +112,16 @@ def print_hue_grid(dark_mode: bool = True) -> None:
         line = "  "
         for label, hf, key in row:
             color = _hue_display_hex(hf, dark_mode)
-            line += f"[{key}] {_swatch(color, 5)} {label:<8}"
+            line += f"{BOLD}[{key}]{RESET} {_swatch(color, 4, dark_mode)} {label:<8}"
         print(line)
 
     label, hf, key = HUES[8]
     color = _hue_display_hex(hf, dark_mode)
-    print(f"  [{key}] {_swatch(color, 5)} {label:<8}  [h] Custom hex     [Enter] Auto-derive")
+    print(
+        f"  {BOLD}[{key}]{RESET} {_swatch(color, 4, dark_mode)} {label:<8}"
+        f"  {DIM}[h]{RESET} Custom hex"
+        f"     {DIM}[Enter]{RESET} Auto-derive"
+    )
     print()
 
 
@@ -192,11 +199,11 @@ def _run_scheme_picker(
             out.append(f"  {mark} {i+1}  {sw}  {star}{ndisp}  {colors['bg']}")
 
         out.append("")
-        out.append(f"  j  {text_swatches(j_colors)}  Just use {target_hex}")
-        out.append(f"  m  Browse all {len(schemes)} schemes")
-        out.append(f"  b  ← Back to hue picker")
+        out.append(f"  {BOLD}j{RESET}  {text_swatches(j_colors)}  {DIM}Just use {target_hex}{RESET}")
+        out.append(f"  {BOLD}m{RESET}  {DIM}Browse all {len(schemes)} schemes{RESET}")
+        out.append(f"  {BOLD}b{RESET}  {DIM}← Back to hue picker{RESET}")
         out.append("")
-        out.append(f"  {DIM}↑↓ preview  ·  Enter select  ·  1-{len(matches)}  ·  j m b{RESET}")
+        out.append(f"  {DIM}↑↓ / jk  preview  ·  Enter select  ·  1–{len(matches)}  ·  j m b  ·  q cancel{RESET}")
 
         return out
 
@@ -264,8 +271,11 @@ def print_review(
     blocked_colors: dict,
     transparency:   dict,
 ) -> None:
+    # Slate-blue accent (matches section header accent in chat.py)
+    _ACC = "\033[38;2;99;120;192m"
+
     lines = canvas_lines(waiting_colors, active_colors, blocked_colors)
-    print("\n  ── Review ────────────────────────────────────────────────────────")
+    print(f"\n  {_ACC}◆{RESET}  {BOLD}Review{RESET}  {DIM}{'─' * 52}{RESET}")
     print()
     for line in lines:
         print(line)
@@ -275,14 +285,14 @@ def print_review(
         ("Processing ", active_colors),
         ("Blocked    ", blocked_colors),
     ]:
-        print(f"  {label}  {text_swatches(colors)}  {colors['bg']}")
+        print(f"  {DIM}{label}{RESET}  {text_swatches(colors)}  {DIM}{colors['bg']}{RESET}")
     print()
     if transparency:
         wa = transparency.get("waiting", 0)
         aa = transparency.get("active",  0)
-        print(f"  Transparency  {wa:.0%} at rest  →  {aa:.0%} while processing")
+        print(f"  {DIM}Transparency  {RESET}{wa:.0%} → {aa:.0%} while processing")
     else:
-        print("  Transparency  off")
+        print(f"  {DIM}Transparency  off{RESET}")
     print()
 
 

@@ -156,16 +156,20 @@ def run_browser(
         end = min(vtop + h, len(schemes))
         fc  = sum(1 for n, _ in schemes if n in favorites)
 
+        _DIM   = "\033[2m"
+        _RESET = "\033[0m"
+        _BOLD  = "\033[1m"
+
         buf = [_HOME]
         if select_mode:
-            header = f"  {prompt}  —  {len(schemes)} schemes · {fc} bookmarked"
+            header = f"  {_BOLD}{prompt}{_RESET}  {_DIM}—  {len(schemes)} schemes · {fc} bookmarked{_RESET}"
             action = "Enter = select"
         else:
-            header = f"  {len(schemes)} schemes · {fc} bookmarked"
+            header = f"  {_BOLD}{len(schemes)} schemes{_RESET}  {_DIM}· {fc} bookmarked{_RESET}"
             action = "Enter = bookmark"
         buf.append(f"{header}{_EOL}")
-        buf.append(f"  Aa = fg on bg   Bb = bold on bg   Cc = selected{_EOL}")
-        buf.append(f"  ↑↓ jk · {action} · q = {'cancel' if select_mode else 'done'}{_EOL}")
+        buf.append(f"  {_DIM}Aa fg · Bb bold · Cc selected{_RESET}{_EOL}")
+        buf.append(f"  {_DIM}↑↓ jk navigate · {action} · PgUp/Dn · g/G first/last · q {'cancel' if select_mode else 'done'}{_RESET}{_EOL}")
         buf.append(_EOL)
 
         for i in range(vtop, end):
@@ -177,7 +181,7 @@ def run_browser(
             buf.append(_EOL)
 
         buf.append(_EOL)
-        buf.append(f"  {cursor + 1} / {len(schemes)}{_EOL}")
+        buf.append(f"  {_DIM}{cursor + 1} / {len(schemes)}{_RESET}{_EOL}")
 
         sys.stdout.write("\n".join(buf))
         sys.stdout.flush()

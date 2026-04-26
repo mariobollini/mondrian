@@ -44,6 +44,8 @@ def _save_config(data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _print_done_summary(dp_path: Path, shell_rc: "Path | None") -> None:
+    from lib.tui import BOLD, DIM, RESET
+
     home = Path.home()
 
     def rel(p):
@@ -52,35 +54,33 @@ def _print_done_summary(dp_path: Path, shell_rc: "Path | None") -> None:
         except ValueError:
             return str(p)
 
-    print("\n  ── Applied ───────────────────────────────────────────────────────")
-    print()
+    print(f"\n  {BOLD}Applied{RESET}\n")
     rows = [
-        ("~/.claude/settings.json",         "hooks  (Submit · PreTool · Stop · Notification)"),
-        ("~/.mondrian.json",                 "palette config"),
-        (rel(dp_path),                       "iTerm2 Dynamic Profiles  (Waiting · Active · Blocked)"),
-        ("~/.mondrian/restore_seq.sh",       "focus-restore sequence"),
+        ("~/.claude/settings.json",     "hooks  (Submit · PreTool · Stop · Notification)"),
+        ("~/.mondrian.json",             "palette config"),
+        (rel(dp_path),                   "iTerm2 Dynamic Profiles  (Waiting · Active · Blocked)"),
+        ("~/.mondrian/restore_seq.sh",   "focus-restore sequence"),
     ]
     if shell_rc:
         rows.append((rel(shell_rc), "shell precmd hook"))
 
     col = max(len(r[0]) for r in rows) + 2
     for path, desc in rows:
-        print(f"  {path:<{col}}  {desc}")
+        print(f"  {DIM}{path:<{col}}{RESET}  {desc}")
 
     print()
-    print("  To undo everything:  mondrian reset")
-    print("  To tweak colors:     mondrian edit")
+    print(f"  {DIM}To undo everything:{RESET}  mondrian reset")
+    print(f"  {DIM}To tweak colors:   {RESET}  mondrian edit")
     print()
     print("  Open a new iTerm2 tab or window to activate.")
     print()
-    print("  ── In-session editing ────────────────────────────────────────────")
-    print()
-    print("  You can also change settings by asking Claude Code directly:")
+    print(f"  {BOLD}In-session editing{RESET}\n")
+    print(f"  {DIM}You can change settings by asking Claude Code directly:{RESET}")
     print('  "set my processing color to Tokyo Night"')
     print('  "turn off the blocked indicator"')
     print('  "change active transparency to 40%"')
     print()
-    print("  Claude will edit ~/.mondrian.json and run mondrian apply for you.")
+    print(f"  {DIM}Claude will edit ~/.mondrian.json and run mondrian apply.{RESET}")
     print()
 
 
@@ -136,9 +136,10 @@ def cmd_configure() -> None:
     from lib.chat import configure_phases
     from lib.colors import srgb_to_hex, hex_to_srgb
     from lib.shell import install_shell_hook, shell_hook_installed
+    from lib.tui import banner, DIM, RESET
 
-    print("\n  mondrian configure")
-    print("  (Run  mondrian reset  at any time to undo everything.)\n")
+    banner(subtitle="configure")
+    print(f"  {DIM}Run  mondrian reset  at any time to undo everything.{RESET}\n")
 
     profile = read_profile_colors()
     print(f"  Profile    : {profile['name']}")
@@ -260,6 +261,8 @@ def cmd_edit() -> None:
         wc = config.get("waiting_colors", {})
         return srgb_to_hsl(*hex_to_srgb(wc.get("bg", "#FAFAFA")))[2] < 0.5
 
+    from lib.tui import banner, swatches, BOLD, DIM, RESET
+
     while True:
         wc  = config.get("waiting_colors",  {})
         ac  = config.get("active_colors",   {})
@@ -270,18 +273,25 @@ def cmd_edit() -> None:
 
         tr_str  = f"{tr.get('active', 0):.0%} while processing" if tr else "off"
         exp_str = f"{exp}s" if exp else "off"
-        be_str  = "on" if be else "off"
+        be_str  = "on" if be else f"{DIM}off{RESET}"
 
+        a_sw = swatches(ac) if ac else "                "
+        b_sw = swatches(bc) if bc else "                "
+
+        banner(
+            waiting_hex  = wc.get("bg") if wc else None,
+            active_hex   = ac.get("bg") if ac else None,
+            blocked_hex  = bc.get("bg") if bc else None,
+            subtitle     = "edit",
+        )
+        print(f"  {BOLD}[1]{RESET}  {a_sw}  Processing   {DIM}{ac.get('bg', '—')}{RESET}")
+        print(f"  {BOLD}[2]{RESET}  {b_sw}  Blocked      {DIM}{bc.get('bg', '—')}{RESET}  ·  {be_str}")
+        print(f"  {BOLD}[3]{RESET}  Toggle blocked      currently {be_str}")
+        print(f"  {BOLD}[4]{RESET}  Transparency        {tr_str}")
+        print(f"  {BOLD}[5]{RESET}  Auto-clear          {exp_str}")
         print()
-        print("  ── Edit ──────────────────────────────────────────────────────────")
-        print(f"  [1] Processing color  {ac.get('bg', '—')}")
-        print(f"  [2] Blocked color     {bc.get('bg', '—')}  [blocked: {be_str}]")
-        print(f"  [3] Toggle blocked    currently {be_str}")
-        print(f"  [4] Transparency      {tr_str}")
-        print(f"  [5] Auto-clear        {exp_str}")
-        print()
-        print("  [a] Apply and save")
-        print("  [q] Quit without saving")
+        print(f"  {BOLD}[a]{RESET}  Apply and save")
+        print(f"  {BOLD}[q]{RESET}  Quit without saving")
         print()
 
         try:
@@ -389,28 +399,57 @@ def cmd_status() -> None:
     from lib.iterm import PROFILE_FILE
     from lib.hooks import hooks_installed
     from lib.shell import shell_hook_installed
+    from lib.tui import banner, swatches, BOLD, DIM, RESET
 
     config = _load_config()
-    print()
-    print("  mondrian status")
-    print()
+
+    wc = config.get("waiting_colors")
+    ac = config.get("active_colors")
+    bc = config.get("blocked_colors")
+
+    banner(
+        waiting_hex = wc["bg"] if wc else None,
+        active_hex  = ac["bg"] if ac else None,
+        blocked_hex = bc["bg"] if bc else None,
+        subtitle    = "status",
+    )
 
     if config:
-        p = config["palette"]
-        print(f"  Direction  : {p.get('direction', '—')}")
-        print(f"  Normal     : {p['waiting']}")
-        print(f"  Processing : {p['active']}")
-        print(f"  Blocked    : {p['blocked']}")
-        tr = config.get("transparency") or {}
-        if tr:
-            print(f"  Fade       : {tr.get('waiting',0):.0%} → {tr.get('active',0):.0%} while processing")
-    else:
-        print("  No saved config. Run: mondrian configure")
+        be  = config.get("blocked_enabled", True)
+        tr  = config.get("transparency") or {}
+        exp = config.get("blocked_expire", 0)
 
-    print()
-    print(f"  Dynamic Profiles : {'✓' if PROFILE_FILE.exists() else '✗'}  {PROFILE_FILE}")
-    print(f"  Hooks installed  : {'✓' if hooks_installed()       else '✗'}")
-    print(f"  Shell hook       : {'✓' if shell_hook_installed()  else '✗'}")
+        rows = [
+            ("Waiting",    wc, True),
+            ("Processing", ac, True),
+            ("Blocked",    bc, be),
+        ]
+        for label, colors, enabled in rows:
+            if colors and enabled:
+                print(f"  {swatches(colors)}  {label:<12}  {DIM}{colors['bg']}{RESET}")
+            elif colors:
+                print(f"  {swatches(colors)}  {DIM}{label:<12}  {colors['bg']}  (disabled){RESET}")
+            else:
+                print(f"  {'—':>12}  {DIM}{label:<12}  —{RESET}")
+
+        print()
+        if tr:
+            wa = tr.get("waiting", 0)
+            aa = tr.get("active", 0)
+            print(f"  {DIM}Transparency  {RESET}{wa:.0%} → {aa:.0%} while processing")
+        else:
+            print(f"  {DIM}Transparency  off{RESET}")
+        if exp:
+            print(f"  {DIM}Blocked expires{RESET}  {exp}s")
+        print()
+    else:
+        print(f"  No saved config. Run: {BOLD}mondrian configure{RESET}\n")
+
+    def ck(ok): return f"{BOLD}✓{RESET}" if ok else f"{DIM}✗{RESET}"
+
+    print(f"  {ck(PROFILE_FILE.exists())}  Dynamic Profiles   {DIM}{PROFILE_FILE}{RESET}")
+    print(f"  {ck(hooks_installed())}  Hooks              {DIM}UserPromptSubmit · PreToolUse · Stop · Notification{RESET}")
+    print(f"  {ck(shell_hook_installed())}  Shell hook")
     print()
 
 
@@ -589,22 +628,56 @@ COMMANDS = {
 
 
 def _show_menu() -> None:
+    from lib.tui import banner, swatches, BOLD, DIM, RESET
+
     config = _load_config()
-    state  = "configured ✓" if config else "not configured"
-    print(f"\n  mondrian  —  iTerm2 colorizer for Claude Code  ({state})\n")
-    print("  [1] Configure    set up color states for Claude Code")
-    print("  [2] Edit         tweak processing/blocked colors, transparency")
-    print("  [3] Browse       explore schemes, manage bookmarks")
-    print("  [4] Status       show current setup")
-    print("  [5] Reset        remove all mondrian config")
+    wc = config.get("waiting_colors")
+    ac = config.get("active_colors")
+    bc = config.get("blocked_colors")
+
+    note = "configured ✓" if config else "not configured"
+    banner(
+        waiting_hex = wc["bg"] if wc else None,
+        active_hex  = ac["bg"] if ac else None,
+        blocked_hex = bc["bg"] if bc else None,
+        note        = note,
+    )
+
+    if wc and ac and bc:
+        be = config.get("blocked_enabled", True)
+        print(f"  {swatches(wc)}  {DIM}Waiting{RESET}")
+        print(f"  {swatches(ac)}  {DIM}Processing{RESET}")
+        if be:
+            print(f"  {swatches(bc)}  {DIM}Blocked{RESET}")
+        else:
+            print(f"  {swatches(bc)}  {DIM}Blocked  (disabled){RESET}")
+        print()
+
+    items = [
+        ("1", "c", "configure", "set up color states for Claude Code"),
+        ("2", "e", "edit",      "tweak processing/blocked colors, transparency"),
+        ("3", "b", "browse",    "explore schemes, manage bookmarks"),
+        ("4", "s", "status",    "show current setup"),
+        ("5", "r", "reset",     "remove all mondrian config"),
+    ]
+    for num, key, cmd, desc in items:
+        print(f"  {BOLD}[{num}/{key}]{RESET}  {cmd:<12}  {DIM}{desc}{RESET}")
     print()
+
     try:
-        raw = input("  > ").strip()
+        raw = input("  › ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return
 
-    {"1": cmd_configure, "2": cmd_edit, "3": cmd_browse, "4": cmd_status, "5": cmd_reset}.get(raw, lambda: None)()
+    dispatch = {
+        "1": cmd_configure, "c": cmd_configure,
+        "2": cmd_edit,      "e": cmd_edit,
+        "3": cmd_browse,    "b": cmd_browse,
+        "4": cmd_status,    "s": cmd_status,
+        "5": cmd_reset,     "r": cmd_reset,
+    }
+    dispatch.get(raw, lambda: None)()
 
 
 def main() -> None:
@@ -628,4 +701,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)

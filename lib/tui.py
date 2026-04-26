@@ -21,11 +21,17 @@ The gap between columns is the terminal background — the "black line".
 
 import shutil
 
-RESET = "\033[0m"
-BOLD  = "\033[1m"
-HIDE  = "\033[?25l"
-SHOW  = "\033[?25h"
-DIM   = "\033[2m"
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+ITALIC = "\033[3m"
+HIDE   = "\033[?25l"
+SHOW   = "\033[?25h"
+
+# Default banner colors when not yet configured (handsome dark slate defaults)
+_DEFAULT_W = "#1C2026"
+_DEFAULT_A = "#1D3A5C"
+_DEFAULT_B = "#5C1D1D"
 
 
 def _bg(hex_color: str) -> str:
@@ -41,17 +47,91 @@ def _fg(hex_color: str) -> str:
 
 
 def swatches(colors: dict) -> str:
-    """Aa Bb Cc text swatches — 12 visible characters wide."""
+    """██ Aa  Bb  Cc ██ text swatches — 16 visible characters wide."""
     BG  = _bg(colors["bg"])
     FG  = _fg(colors["fg"])
     BD  = _fg(colors["bold"])
     SBG = _bg(colors["selbg"])
     SFG = _fg(colors["selfg"])
+    # █ full-block glyph in fg color: foreground-drawn, unaffected by bg overrides
+    bdr = f"{FG}██{RESET}"
     return (
+        f"{bdr}"
         f"{BG}{FG} Aa {RESET}"
         f"{BG}{BOLD}{BD} Bb {RESET}"
         f"{SBG}{SFG} Cc {RESET}"
+        f"{bdr}"
     )
+
+
+def banner(
+    waiting_hex:  "str | None" = None,
+    active_hex:   "str | None" = None,
+    blocked_hex:  "str | None" = None,
+    subtitle: str = "iTerm2 colorizer for Claude Code",
+    note:     str = "",
+) -> None:
+    """
+    Tri-color Mondrian stripe + title line.
+    Row 1: plain color fill.  Row 2: same color + fg-labeled state name.
+    The label guarantees the Waiting stripe is visible even when its bg matches
+    the terminal background.
+    """
+    from .colors import hex_to_srgb, srgb_to_hsl
+
+    cols = shutil.get_terminal_size((80, 24)).columns
+
+    w_hex = waiting_hex or _DEFAULT_W
+    a_hex = active_hex  or _DEFAULT_A
+    b_hex = blocked_hex or _DEFAULT_B
+
+    margin = 2
+    gap    = 2
+    inner  = cols - margin * 2 - gap * 2
+    w_w    = inner // 3
+    a_w    = inner // 3
+    b_w    = inner - w_w - a_w
+
+    # Muted blue-gray █ border — visible on dark terminals, unaffected by bg
+    B = "\033[38;2;130;135;150m"
+
+    def _contrast(hex_color: str) -> str:
+        l = srgb_to_hsl(*hex_to_srgb(hex_color))[2]
+        return "\033[38;2;210;215;230m" if l < 0.5 else "\033[38;2;40;45;55m"
+
+    # Each panel's total visual width; border chars take 1 on each side
+    panels = [
+        (w_hex, "Waiting",    w_w),
+        (a_hex, "Processing", a_w),
+        (b_hex, "Blocked",    b_w),
+    ]
+
+    def _border_row() -> str:
+        parts = [f"{B}{'█' * w}{RESET}" for _, _, w in panels]
+        return " " * margin + (" " * gap).join(parts)
+
+    def _fill_row(labeled: bool) -> str:
+        parts = []
+        for hex_color, label, w in panels:
+            cw = w - 2
+            BG = _bg(hex_color)
+            if labeled:
+                FG  = _contrast(hex_color)
+                pad = max(0, cw - len(label) - 1)
+                content = f"{BG}{FG} {label}{' ' * pad}{RESET}"
+            else:
+                content = f"{BG}{' ' * cw}{RESET}"
+            parts.append(f"{B}█{RESET}{content}{B}█{RESET}")
+        return " " * margin + (" " * gap).join(parts)
+
+    note_str = f"  {DIM}{note}{RESET}" if note else ""
+    print()
+    print(_border_row())
+    print(_fill_row(labeled=False))
+    print(_fill_row(labeled=True))
+    print(_border_row())
+    print(f"\n  {BOLD}mondrian{RESET}  {DIM}—  {subtitle}{RESET}{note_str}")
+    print()
 
 
 # Pending block styling (not yet configured)
@@ -82,8 +162,8 @@ def _block_lines(colors: "dict | None", width: int, height: int, label: str) -> 
     blank = BG + " " * width + RESET
 
     hex_str   = colors["bg"]   # 7 chars e.g. "#2E3440"
-    sw_vis    = 12              # " Aa " × 3 = 12 visible chars
-    # swatch row content: "  " + 12 + "  " + 7 = 23 visible chars minimum
+    sw_vis    = 16              # 2-bdr + " Aa " × 3 + 2-bdr = 16 visible chars
+    # swatch row content: "  " + 16 + "  " + 7 = 27 visible chars minimum
     sw_trail  = max(0, width - 2 - sw_vis - 2 - len(hex_str))
     lbl_trail = max(0, width - 2 - len(label))
 

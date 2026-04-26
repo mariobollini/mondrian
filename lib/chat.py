@@ -5,6 +5,7 @@ Phase-by-phase interactive configure flow.
 import sys
 from .colors import srgb_to_hex, hex_to_srgb, srgb_to_hsl, derive_state_colors, derive_palette
 from .fetch import list_local_schemes, load_favorites
+from .tui import BOLD, DIM, RESET
 
 
 # ---------------------------------------------------------------------------
@@ -92,10 +93,13 @@ def configure_phases(profile: dict) -> "tuple | None":
     dark_mode = srgb_to_hsl(*profile["bg"])[2] < 0.5
     schemes, favorites = _get_all_schemes()
 
+    # Slate-blue accent used for phase headings
+    _ACC = "\033[38;2;99;120;192m"
+
     def section(title: str, desc: str) -> None:
-        pad = max(1, 58 - len(title))
-        print(f"\n  ── {title} {'─' * pad}")
-        print(f"  {desc}\n")
+        pad = max(1, 56 - len(title))
+        print(f"\n  {_ACC}◆{RESET}  {BOLD}{title}{RESET}  {DIM}{'─' * pad}{RESET}")
+        print(f"     {DIM}{desc}{RESET}\n")
 
     def auto_active(wc: dict) -> dict:
         pal = derive_palette(hex_to_srgb(wc["bg"]))
@@ -151,7 +155,7 @@ def configure_phases(profile: dict) -> "tuple | None":
     )
     if active_colors is None:
         active_colors = auto_active(waiting_colors)
-        print(f"  Auto-derived  →  {active_colors['bg']}\n")
+        print(f"  {DIM}Auto-derived  →{RESET}  {active_colors['bg']}\n")
 
     # ── Phase 3: Blocked ─────────────────────────────────────────────────
     section(
@@ -173,10 +177,10 @@ def configure_phases(profile: dict) -> "tuple | None":
         )
         if blocked_colors is None:
             blocked_colors = auto_blocked(waiting_colors)
-            print(f"  Auto-derived  →  {blocked_colors['bg']}\n")
+            print(f"  {DIM}Auto-derived  →{RESET}  {blocked_colors['bg']}\n")
     else:
         blocked_colors = dict(waiting_colors)
-        print(f"  Blocked indicator disabled.\n")
+        print(f"  {DIM}Blocked indicator disabled.{RESET}\n")
 
     # ── Phase 4: Transparency ────────────────────────────────────────────
     transparency_required = waiting_colors["bg"] == active_colors["bg"]
