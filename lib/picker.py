@@ -1,13 +1,19 @@
 """
 Phase-by-phase interactive color picker for mondrian configure.
 
-Flow per state: hue grid → closest matching schemes → confirm.
+Flow per state:
+  canvas preview  →  hue grid  →  scheme picker (↑↓ live canvas preview)  →  done
 """
 
-from .colors import srgb_to_hsl, hsl_to_srgb, srgb_to_hex, hex_to_srgb, derive_state_colors
+import sys
 
-RESET = "\033[0m"
-BOLD  = "\033[1m"
+from .colors import srgb_to_hsl, hsl_to_srgb, srgb_to_hex, hex_to_srgb, derive_state_colors
+from .tui    import (
+    _bg as _ansi_bg, _fg as _ansi_fg,
+    swatches as text_swatches,
+    canvas_lines, canvas_height,
+    RESET, BOLD, DIM, HIDE, SHOW,
+)
 
 # (label, hue fraction 0–1 or None for neutral, single-key shortcut)
 HUES = [
@@ -26,32 +32,11 @@ _VALID_KEYS = {h[2] for h in HUES} | {"h", ""}
 
 
 # ---------------------------------------------------------------------------
-# ANSI helpers
+# Swatch helper (small inline swatches for the hue grid)
 # ---------------------------------------------------------------------------
-
-def _ansi_bg(hex_color: str) -> str:
-    r, g, b = (round(v * 255) for v in hex_to_srgb(hex_color))
-    return f"\033[48;2;{r};{g};{b}m"
-
-def _ansi_fg(hex_color: str) -> str:
-    r, g, b = (round(v * 255) for v in hex_to_srgb(hex_color))
-    return f"\033[38;2;{r};{g};{b}m"
 
 def _swatch(hex_color: str, width: int = 5) -> str:
     return f"{_ansi_bg(hex_color)}{' ' * width}{RESET}"
-
-def text_swatches(colors: dict) -> str:
-    """Aa Bb Cc swatches — normal fg, bold, and selected text on each bg."""
-    BG  = _ansi_bg(colors["bg"])
-    FG  = _ansi_fg(colors["fg"])
-    BD  = _ansi_fg(colors["bold"])
-    SBG = _ansi_bg(colors["selbg"])
-    SFG = _ansi_fg(colors["selfg"])
-    return (
-        f"{BG}{FG} Aa {RESET}"
-        f"{BG}{BOLD}{BD} Bb {RESET}"
-        f"{SBG}{SFG} Cc {RESET}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -59,14 +44,14 @@ def text_swatches(colors: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _hue_display_hex(hue_frac, dark_mode: bool) -> str:
-    """Mid-tone color for the swatch in the picker grid."""
+    """Mid-tone color for the swatch in the hue picker grid."""
     l = 0.38 if dark_mode else 0.62
     if hue_frac is None:
         return srgb_to_hex(*hsl_to_srgb(0.0, 0.0, l))
     return srgb_to_hex(*hsl_to_srgb(hue_frac, 0.65, l))
 
 def _hue_base_hex(hue_frac, dark_mode: bool) -> str:
-    """A reasonable terminal bg for this hue (used for 'just use this color')."""
+    """A reasonable terminal bg for this hue (seed for scheme search)."""
     if hue_frac is None:
         l = 0.22 if dark_mode else 0.78
         return srgb_to_hex(*hsl_to_srgb(0.0, 0.0, l))
@@ -91,20 +76,14 @@ def bg_distance(hex1: str, hex2: str) -> float:
     hd = min(hd, 1.0 - hd) * 2       # circular, normalized 0→1
     ld = abs(l1 - l2)
 
-    # Gray (S < 0.15) and colorful colors are different "types".
-    # A large fixed penalty ensures grays never appear in a colored search.
+    # Gray (S < 0.15) vs colorful → large penalty so grays never pollute colored searches
     type_mismatch = 2.5 if (s1 > 0.15) != (s2 > 0.15) else 0.0
 
-    # Hue contribution scales with the minimum saturation so that near-grays
-    # don't get false credit for sharing hue=0 with red.
     return hd * min(s1, s2) * 3.0 + ld + type_mismatch
 
 
 def closest_schemes(target_hex: str, schemes: list, n: int = 6) -> list:
-    """
-    Return [(name, entry, colors), ...] sorted by bg proximity to target_hex.
-    Loads all scheme colors eagerly (498 small XML files ≈ < 1 s).
-    """
+    """Return [(name, entry, colors), ...] sorted by bg proximity to target_hex."""
     from .colors import load_itermcolors
     print("  Searching…", end="\r", flush=True)
     scored = []
@@ -121,14 +100,11 @@ def closest_schemes(target_hex: str, schemes: list, n: int = 6) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Display
+# Hue grid
 # ---------------------------------------------------------------------------
 
 def print_hue_grid(dark_mode: bool = True) -> None:
-    """
-    Two rows of 4 swatches, then a row with Gray + shortcut hints.
-    Label sits on the same line as the swatch so ANSI widths can't misalign.
-    """
+    """Two rows of 4 hue swatches + Gray row, labels inline."""
     for row in [HUES[:4], HUES[4:8]]:
         line = "  "
         for label, hf, key in row:
@@ -136,12 +112,151 @@ def print_hue_grid(dark_mode: bool = True) -> None:
             line += f"[{key}] {_swatch(color, 5)} {label:<8}"
         print(line)
 
-    # Last row: Gray swatch + shortcut hints inline
     label, hf, key = HUES[8]
     color = _hue_display_hex(hf, dark_mode)
     print(f"  [{key}] {_swatch(color, 5)} {label:<8}  [h] Custom hex     [Enter] Auto-derive")
     print()
 
+
+# ---------------------------------------------------------------------------
+# Canvas helpers used within this module
+# ---------------------------------------------------------------------------
+
+def _draw_canvas_static(waiting_colors: dict, phase_slot: str,
+                         other_colors: "dict | None") -> None:
+    """Print the canvas above the hue grid (pending slot shown as placeholder)."""
+    if phase_slot == "active":
+        lines = canvas_lines(waiting_colors, None, other_colors)
+    else:
+        lines = canvas_lines(waiting_colors, other_colors, None)
+    print()
+    for line in lines:
+        print(line)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Interactive scheme picker with live Mondrian canvas
+# ---------------------------------------------------------------------------
+
+def _run_scheme_picker(
+    matches:       list,
+    target_hex:    str,
+    target_label:  str,
+    schemes:       list,
+    favorites:     set,
+    waiting_colors: dict,
+    phase_slot:    str,
+    other_colors:  "dict | None",
+) -> "dict | None | str":
+    """
+    Full-height interactive scheme picker.
+
+    ► cursor navigates the list; canvas at top updates live to preview each scheme.
+
+    Returns:
+      dict   — selected colors
+      'j'    — just use target_hex (auto-derive text)
+      'm'    — open full browser
+      'b'    — back to hue picker
+      None   — cancel
+    """
+    from .browse import _getch
+
+    cursor  = 0
+    n_shown = 0  # lines currently on screen (for up-move redraw)
+
+    j_colors = derive_state_colors(
+        hex_to_srgb(target_hex),
+        hex_to_srgb(waiting_colors["fg"]),
+        hex_to_srgb(waiting_colors["selbg"]),
+    )
+
+    def _cv(preview: dict) -> list[str]:
+        if phase_slot == "active":
+            return canvas_lines(waiting_colors, preview, other_colors)
+        return canvas_lines(waiting_colors, other_colors, preview)
+
+    def _screen() -> list[str]:
+        out = [""] + _cv(matches[cursor][2]) + [""]
+
+        out.append(f"  Closest to {target_label}  ({target_hex}):")
+        out.append("")
+
+        for i, (name, _, colors) in enumerate(matches):
+            star  = "★ " if name in favorites else "  "
+            mark  = "►" if i == cursor else " "
+            sw    = text_swatches(colors)
+            ndisp = (f"\033[1m{name:<26}\033[m"
+                     if i == cursor else f"{name:<26}")
+            out.append(f"  {mark} {i+1}  {sw}  {star}{ndisp}  {colors['bg']}")
+
+        out.append("")
+        out.append(f"  j  {text_swatches(j_colors)}  Just use {target_hex}")
+        out.append(f"  m  Browse all {len(schemes)} schemes")
+        out.append(f"  b  ← Back to hue picker")
+        out.append("")
+        out.append(f"  {DIM}↑↓ preview  ·  Enter select  ·  1-{len(matches)}  ·  j m b{RESET}")
+
+        return out
+
+    def _write(lines: list[str], n_prev: int) -> int:
+        if n_prev:
+            sys.stdout.write(f"\033[{n_prev}A")
+        for line in lines:
+            sys.stdout.write(f"\033[2K{line}\n")
+        sys.stdout.flush()
+        return len(lines)
+
+    sys.stdout.write(HIDE)
+    n_shown = _write(_screen(), 0)
+
+    try:
+        while True:
+            key = _getch()
+
+            if key in ("\x1b[A", "\x1bOA", "k"):   # up
+                if cursor > 0:
+                    cursor -= 1
+                    n_shown = _write(_screen(), n_shown)
+
+            elif key in ("\x1b[B", "\x1bOB"):       # down (j reserved for "just use")
+                if cursor < len(matches) - 1:
+                    cursor += 1
+                    n_shown = _write(_screen(), n_shown)
+
+            elif key in ("\r", "\n"):
+                return matches[cursor][2]
+
+            elif key.isdigit():
+                idx = int(key) - 1
+                if 0 <= idx < len(matches):
+                    return matches[idx][2]
+
+            elif key == "j":
+                return "j"
+            elif key == "m":
+                return "m"
+            elif key == "b":
+                # Clear this display area so the hue grid appears cleanly above
+                sys.stdout.write(f"\033[{n_shown}A")
+                for _ in range(n_shown):
+                    sys.stdout.write("\033[2K\n")
+                sys.stdout.write(f"\033[{n_shown}A")
+                sys.stdout.flush()
+                return "b"
+
+            elif key in ("q", "\x03"):
+                return None
+
+    finally:
+        sys.stdout.write(SHOW)
+        sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# Review
+# ---------------------------------------------------------------------------
 
 def print_review(
     waiting_colors: dict,
@@ -149,10 +264,14 @@ def print_review(
     blocked_colors: dict,
     transparency:   dict,
 ) -> None:
+    lines = canvas_lines(waiting_colors, active_colors, blocked_colors)
     print("\n  ── Review ────────────────────────────────────────────────────────")
     print()
+    for line in lines:
+        print(line)
+    print()
     for label, colors in [
-        ("Normal     ", waiting_colors),
+        ("Waiting    ", waiting_colors),
         ("Processing ", active_colors),
         ("Blocked    ", blocked_colors),
     ]:
@@ -163,7 +282,7 @@ def print_review(
         aa = transparency.get("active",  0)
         print(f"  Transparency  {wa:.0%} at rest  →  {aa:.0%} while processing")
     else:
-        print(f"  Transparency  off")
+        print("  Transparency  off")
     print()
 
 
@@ -182,7 +301,7 @@ def print_review_and_confirm(
 
 
 # ---------------------------------------------------------------------------
-# Interactive picker
+# Main picker entry point
 # ---------------------------------------------------------------------------
 
 def pick_state_color(
@@ -192,16 +311,23 @@ def pick_state_color(
     waiting_colors: dict,
     dark_mode:      bool,
     hint:           str = "",
+    phase_slot:     str = "active",
+    other_colors:   "dict | None" = None,
 ) -> "dict | None":
     """
-    Hue grid → closest schemes → pick one (or auto-derive).
+    Hue grid → scheme picker (with live Mondrian canvas preview).
     Returns a {bg, fg, bold, selbg, selfg} hex dict, or None for auto-derive.
+
+    phase_slot   : "active" or "blocked" — which canvas slot this pick fills
+    other_colors : already-configured colors for the other slot (shown statically)
     """
     from .colors import load_itermcolors
     from .browse import run_browser
 
     while True:
+        _draw_canvas_static(waiting_colors, phase_slot, other_colors)
         print_hue_grid(dark_mode)
+
         suffix = f" (suggested: {hint})" if hint else ""
         try:
             raw = input(f"  Hue{suffix}: ").strip().lower()
@@ -213,7 +339,7 @@ def pick_state_color(
             continue
 
         if raw == "":
-            return None                     # auto-derive
+            return None   # auto-derive
 
         if raw == "h":
             try:
@@ -235,52 +361,33 @@ def pick_state_color(
             target_hex   = _hue_base_hex(hf, dark_mode)
             target_label = label
 
-        # Show matching schemes
         matches = closest_schemes(target_hex, schemes, n=6)
         if not matches:
-            print(f"\n  No schemes in library. Run: mondrian fetch --all\n")
+            print("\n  No schemes in library. Run: mondrian fetch --all\n")
             return None
 
-        print(f"\n  Closest to {target_label}  ({target_hex}):\n")
-        for i, (name, _, colors) in enumerate(matches, 1):
-            star = "★ " if name in favorites else "  "
-            print(f"  {i}  {text_swatches(colors)}  {star}{name:<28}  {colors['bg']}")
+        result = _run_scheme_picker(
+            matches, target_hex, target_label, schemes, favorites,
+            waiting_colors, phase_slot, other_colors,
+        )
 
-        print()
-        print(f"  j  {_swatch(target_hex, 6)}  Just use {target_hex}  (auto-derive text)")
-        print(f"  m  Browse all {len(schemes)} schemes")
-        print(f"  b  ← Back to hue picker")
-        print()
-
-        try:
-            choice = input("  > ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        if result is None:
             return None
-
-        if choice == "b":
-            continue
-
-        if choice == "j":
+        elif result == "b":
+            continue   # back to hue grid
+        elif result == "j":
             return derive_state_colors(
                 hex_to_srgb(target_hex),
                 hex_to_srgb(waiting_colors["fg"]),
                 hex_to_srgb(waiting_colors["selbg"]),
             )
-
-        if choice == "m":
+        elif result == "m":
             picked = run_browser(
                 schemes, favorites, load_itermcolors,
                 select_mode=True, prompt=f"Select: {phase_name}",
             )
             if picked:
                 return picked
-            continue
-
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(matches):
-                return matches[idx][2]
-        except ValueError:
-            pass
-
-        print("  Invalid choice — try again.\n")
+            continue   # back to hue grid after browser exits
+        else:
+            return result   # colors dict

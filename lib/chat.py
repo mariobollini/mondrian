@@ -147,6 +147,7 @@ def configure_phases(profile: dict) -> "tuple | None":
     active_colors = pick_state_color(
         "Processing", schemes, favorites, waiting_colors, dark_mode,
         hint="blue [6]",
+        phase_slot="active", other_colors=None,
     )
     if active_colors is None:
         active_colors = auto_active(waiting_colors)
@@ -168,6 +169,7 @@ def configure_phases(profile: dict) -> "tuple | None":
         blocked_colors = pick_state_color(
             "Blocked", schemes, favorites, waiting_colors, dark_mode,
             hint="red [1]",
+            phase_slot="blocked", other_colors=active_colors,
         )
         if blocked_colors is None:
             blocked_colors = auto_blocked(waiting_colors)

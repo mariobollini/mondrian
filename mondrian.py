@@ -295,14 +295,20 @@ def cmd_edit() -> None:
 
         if raw == "1":
             sc, fav = _get_schemes()
-            picked = pick_state_color("Processing", sc, fav, wc, _dark(), hint="blue [6]")
+            picked = pick_state_color(
+                "Processing", sc, fav, wc, _dark(), hint="blue [6]",
+                phase_slot="active", other_colors=bc,
+            )
             if picked:
-                config["active_colors"]    = picked
+                config["active_colors"]     = picked
                 config["palette"]["active"] = picked["bg"]
 
         elif raw == "2":
             sc, fav = _get_schemes()
-            picked = pick_state_color("Blocked", sc, fav, wc, _dark(), hint="red [1]")
+            picked = pick_state_color(
+                "Blocked", sc, fav, wc, _dark(), hint="red [1]",
+                phase_slot="blocked", other_colors=ac,
+            )
             if picked:
                 config["blocked_colors"]     = picked
                 config["palette"]["blocked"] = picked["bg"]
