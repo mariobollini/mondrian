@@ -12,6 +12,7 @@ CONFIG_PATH     = Path("~/.mondrian.json").expanduser()
 MONDRIAN_MARKER  = "Mondrian"
 STOP_TS_FILE     = "/tmp/.mondrian_stop"
 BLOCKED_TS_FILE  = "/tmp/.mondrian_blocked"
+SUPPRESS_FILE    = "/tmp/.mondrian_suppress"
 RESTORE_SEQ_PATH = Path("~/.mondrian/restore_seq.sh").expanduser()
 
 _FS_CHECK = (
@@ -59,22 +60,20 @@ def _active_cmd(
 ) -> str:
     """
     UserPromptSubmit / PreToolUse hook.
-    reset_stop=True (UserPromptSubmit only): writes 0 to the stop timestamp
-    so the Notification timing guard always passes for the current turn.
-    If transparency is configured, wraps the AppleScript call in a full-screen
-    guard — iTerm2 full-screen windows have no background to show through, so
-    we skip the opacity change and optionally use a different color instead
-    (fullscreen_colors, for Direction D where active == waiting).
+    reset_stop=True (UserPromptSubmit only): clears the suppress marker (so
+    stale ones don't eat a real blocked notification) and resets the stop
+    timestamp to 0 so the Notification timing guard passes during this turn.
     """
+    clear_suppress = f"rm -f {SUPPRESS_FILE}"
     reset = f"echo 0 > {STOP_TS_FILE}"
     send  = _send_seq(_colors_seq(**colors))
 
     if alpha is None:
-        return _join(reset, send) if reset_stop else _join(send)
+        return _join(clear_suppress, reset, send) if reset_stop else _join(send)
 
     fs_send  = _send_seq(_colors_seq(**(fullscreen_colors or colors)))
     windowed = f"{send}; {_transparency_stmt(alpha)}"
-    prefix   = f"{reset}; " if reset_stop else ""
+    prefix   = f"{clear_suppress}; {reset}; " if reset_stop else ""
     return (
         f"{prefix}if {_FS_CHECK}; "
         f"then {fs_send}; "
@@ -83,16 +82,23 @@ def _active_cmd(
 
 
 def _restore_cmd(colors: dict, alpha: Optional[float] = None) -> str:
-    """Stop hook: stamp the time, clear the blocked marker, restore colors."""
+    """Stop hook: write suppress marker first, then stamp time, restore colors.
+
+    The suppress marker is written before anything else so the concurrent
+    end-of-turn Notification has the best chance of seeing it before evaluating
+    the timing guard.  Notification removes it on sight (single-use), so the
+    next genuine blocked notification falls through to the timing-guard fallback.
+    """
+    suppress      = f"echo 1 > {SUPPRESS_FILE}"
     stamp         = f"echo $(date +%s) > {STOP_TS_FILE}"
     clear_blocked = f"rm -f {BLOCKED_TS_FILE}"
     send          = _send_seq(_colors_seq(**colors))
     if alpha is None:
-        return _join(stamp, clear_blocked, send)
+        return _join(suppress, stamp, clear_blocked, send)
 
-    # Full-screen: stamp + clear + colors (skip transparency — no background to show)
-    windowed   = f"{stamp}; {clear_blocked}; {send}; {_transparency_stmt(alpha)}"
-    fullscreen = f"{stamp}; {clear_blocked}; {send}"
+    # Full-screen: no transparency call (no background visible in full-screen)
+    windowed   = f"{suppress}; {stamp}; {clear_blocked}; {send}; {_transparency_stmt(alpha)}"
+    fullscreen = f"{suppress}; {stamp}; {clear_blocked}; {send}"
     return (
         f"if {_FS_CHECK}; "
         f"then {fullscreen}; "
@@ -137,10 +143,19 @@ def _blocked_cmd(
     else:
         inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}"
 
-    return (
+    # Suppress marker (written by Stop) is the primary guard — it catches the
+    # race where Stop and end-of-turn Notification fire simultaneously and
+    # Notification evaluates the timing guard before Stop updates the timestamp.
+    # It is single-use: Notification removes it, so the next real blocked
+    # notification falls through to the timing-guard fallback.
+    timing_guard = (
         f"ts=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
         f"[ $(($(date +%s)-ts)) -gt {grace} ] && "
-        f"{{ {inner}; }} # Mondrian"
+        f"{{ {inner}; }}"
+    )
+    return (
+        f"if [ -f {SUPPRESS_FILE} ]; then rm -f {SUPPRESS_FILE}; "
+        f"else {timing_guard}; fi # Mondrian"
     )
 
 

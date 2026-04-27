@@ -45,6 +45,7 @@ Colors are set via iTerm2's `SetColors` OSC escape sequence. Transparency is opt
 | `~/Library/Application Support/iTerm2/DynamicProfiles/mondrian.json` | Writes three Dynamic Profiles (Mondrian-Waiting, Mondrian-Active, Mondrian-Blocked) |
 | `~/Library/Preferences/com.googlecode.iterm2.plist` | **Read-only** — detects the user's active iTerm2 profile |
 | `/tmp/.mondrian_stop` | Stop hook writes a Unix timestamp here; Notification hook reads it for the 3-second timing guard |
+| `/tmp/.mondrian_suppress` | Stop writes `1` here (before the timestamp); Notification removes it on sight — single-use guard that prevents the end-of-turn Notification race |
 
 ---
 
@@ -58,7 +59,8 @@ User submits prompt
 
 Claude uses a tool requiring permission
   → Notification hook fires
-  → checks: $(date +%s) - $(cat /tmp/.mondrian_stop) > 3?
+  → primary guard: if /tmp/.mondrian_suppress exists → remove it → suppressed
+  → fallback guard: $(date +%s) - $(cat /tmp/.mondrian_stop) > 3?
   → if yes: printf SetColors (blocked/red) > /dev/tty
   → if no: suppressed (end-of-response spurious notification)
 
@@ -68,9 +70,16 @@ User approves permission
 
 Claude finishes responding
   → Stop hook fires
+  → echo 1 > /tmp/.mondrian_suppress  ← written FIRST so concurrent Notification sees it
   → echo $(date +%s) > /tmp/.mondrian_stop
   → printf SetColors (waiting/original) > /dev/tty
   → optional: osascript restores transparency
+
+User submits next prompt
+  → UserPromptSubmit hook fires
+  → rm -f /tmp/.mondrian_suppress  ← clears stale suppress (if no Notification ever consumed it)
+  → echo 0 > /tmp/.mondrian_stop
+  → printf SetColors (active) > /dev/tty
 ```
 
 All hook commands are single shell one-liners stored in `~/.claude/settings.json` and tagged with `# Mondrian` for identification and removal.

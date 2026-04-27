@@ -482,7 +482,7 @@ def cmd_reset() -> None:
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
 
-    for tmp in ("/tmp/.mondrian_stop", "/tmp/.mondrian_blocked"):
+    for tmp in ("/tmp/.mondrian_stop", "/tmp/.mondrian_blocked", "/tmp/.mondrian_suppress"):
         p = Path(tmp)
         if p.exists():
             p.unlink()
