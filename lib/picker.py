@@ -15,20 +15,21 @@ from .tui    import (
     RESET, BOLD, DIM, HIDE, SHOW,
 )
 
-# (label, hue fraction 0–1 or None for neutral, single-key shortcut)
+# (label, hue fraction 0–1 or None for neutral, number key, letter key)
 HUES = [
-    ("Red",    0.000, "1"),
-    ("Orange", 0.083, "2"),
-    ("Yellow", 0.167, "3"),
-    ("Green",  0.333, "4"),
-    ("Teal",   0.500, "5"),
-    ("Blue",   0.611, "6"),
-    ("Violet", 0.750, "7"),
-    ("Pink",   0.889, "8"),
-    ("Gray",   None,  "9"),
+    ("Red",    0.000, "1", "r"),
+    ("Orange", 0.083, "2", "o"),
+    ("Yellow", 0.167, "3", "y"),
+    ("Green",  0.333, "4", "g"),
+    ("Teal",   0.500, "5", "t"),
+    ("Blue",   0.611, "6", "b"),
+    ("Violet", 0.750, "7", "v"),
+    ("Pink",   0.889, "8", "p"),
+    ("Gray",   None,  "9", "n"),
 ]
 
-_VALID_KEYS = {h[2] for h in HUES} | {"h", ""}
+_LETTER_KEYS = {h[3] for h in HUES}
+_VALID_KEYS  = {h[2] for h in HUES} | _LETTER_KEYS | {"h", "w", ""}
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +37,6 @@ _VALID_KEYS = {h[2] for h in HUES} | {"h", ""}
 # ---------------------------------------------------------------------------
 
 def _swatch(hex_color: str, width: int = 5, dark_mode: bool = True) -> str:
-    # █ full-block glyph: foreground-drawn so unaffected by bg color overrides
     bdr_fg = "\033[38;2;190;195;210m" if dark_mode else "\033[38;2;70;75;85m"
     bdr = f"{bdr_fg}█{RESET}"
     return f"{bdr}{_ansi_bg(hex_color)}{' ' * width}{RESET}{bdr}"
@@ -70,7 +70,6 @@ def bg_distance(hex1: str, hex2: str) -> float:
     """
     Perceptual distance between two background colors.
     Saturated colors match by hue; achromatic colors match by lightness.
-    A colored+gray pair always scores worse than two same-hue colored pairs.
     """
     h1, s1, l1 = srgb_to_hsl(*hex_to_srgb(hex1))
     h2, s2, l2 = srgb_to_hsl(*hex_to_srgb(hex2))
@@ -79,13 +78,12 @@ def bg_distance(hex1: str, hex2: str) -> float:
     hd = min(hd, 1.0 - hd) * 2       # circular, normalized 0→1
     ld = abs(l1 - l2)
 
-    # Gray (S < 0.15) vs colorful → large penalty so grays never pollute colored searches
     type_mismatch = 2.5 if (s1 > 0.15) != (s2 > 0.15) else 0.0
 
     return hd * min(s1, s2) * 3.0 + ld + type_mismatch
 
 
-def closest_schemes(target_hex: str, schemes: list, n: int = 6) -> list:
+def closest_schemes(target_hex: str, schemes: list, n: int = 10) -> list:
     """Return [(name, entry, colors), ...] sorted by bg proximity to target_hex."""
     from .colors import load_itermcolors
     print("  Searching…", end="\r", flush=True)
@@ -106,21 +104,23 @@ def closest_schemes(target_hex: str, schemes: list, n: int = 6) -> list:
 # Hue grid
 # ---------------------------------------------------------------------------
 
-def print_hue_grid(dark_mode: bool = True) -> None:
-    """Two rows of 4 hue swatches + Gray row, labels inline."""
+def print_hue_grid(dark_mode: bool = True, show_clone: bool = False) -> None:
+    """Two rows of 4 hue swatches + Gray row, number and letter shortcuts."""
     for row in [HUES[:4], HUES[4:8]]:
         line = "  "
-        for label, hf, key in row:
+        for label, hf, key, letter in row:
             color = _hue_display_hex(hf, dark_mode)
-            line += f"{BOLD}[{key}]{RESET} {_swatch(color, 4, dark_mode)} {label:<8}"
+            line += f"{BOLD}[{key}/{letter}]{RESET} {_swatch(color, 3, dark_mode)} {label:<8}"
         print(line)
 
-    label, hf, key = HUES[8]
+    label, hf, key, letter = HUES[8]
     color = _hue_display_hex(hf, dark_mode)
+    clone_hint = f"     {DIM}[w]{RESET} Clone waiting" if show_clone else ""
     print(
-        f"  {BOLD}[{key}]{RESET} {_swatch(color, 4, dark_mode)} {label:<8}"
+        f"  {BOLD}[{key}/{letter}]{RESET} {_swatch(color, 3, dark_mode)} {label:<8}"
         f"  {DIM}[h]{RESET} Custom hex"
         f"     {DIM}[Enter]{RESET} Auto-derive"
+        + clone_hint
     )
     print()
 
@@ -166,12 +166,14 @@ def _run_scheme_picker(
       'j'    — just use target_hex (auto-derive text)
       'm'    — open full browser
       'b'    — back to hue picker
+      'f'    — fetch a scheme by name (caller handles)
+      '+'    — show more results (caller handles)
       None   — cancel
     """
     from .browse import _getch
 
     cursor  = 0
-    n_shown = 0  # lines currently on screen (for up-move redraw)
+    n_shown = 0
 
     j_colors = derive_state_colors(
         hex_to_srgb(target_hex),
@@ -196,14 +198,16 @@ def _run_scheme_picker(
             sw    = text_swatches(colors)
             ndisp = (f"\033[1m{name:<26}\033[m"
                      if i == cursor else f"{name:<26}")
-            out.append(f"  {mark} {i+1}  {sw}  {star}{ndisp}  {colors['bg']}")
+            out.append(f"  {mark} {i+1:2d}  {sw}  {star}{ndisp}  {colors['bg']}")
 
         out.append("")
         out.append(f"  {BOLD}j{RESET}  {text_swatches(j_colors)}  {DIM}Just use {target_hex}{RESET}")
         out.append(f"  {BOLD}m{RESET}  {DIM}Browse all {len(schemes)} schemes{RESET}")
+        out.append(f"  {BOLD}+{RESET}  {DIM}Show more results{RESET}")
+        out.append(f"  {BOLD}f{RESET}  {DIM}Fetch scheme by name{RESET}")
         out.append(f"  {BOLD}b{RESET}  {DIM}← Back to hue picker{RESET}")
         out.append("")
-        out.append(f"  {DIM}↑↓ / jk  preview  ·  Enter select  ·  1–{len(matches)}  ·  j m b  ·  q cancel{RESET}")
+        out.append(f"  {DIM}↑↓ / k  preview  ·  Enter select  ·  1–{len(matches)}  ·  j m + f b  ·  q cancel{RESET}")
 
         return out
 
@@ -244,8 +248,11 @@ def _run_scheme_picker(
                 return "j"
             elif key == "m":
                 return "m"
+            elif key == "+":
+                return "+"
+            elif key == "f":
+                return "f"
             elif key == "b":
-                # Clear this display area so the hue grid appears cleanly above
                 sys.stdout.write(f"\033[{n_shown}A")
                 for _ in range(n_shown):
                     sys.stdout.write("\033[2K\n")
@@ -271,7 +278,6 @@ def print_review(
     blocked_colors: dict,
     transparency:   dict,
 ) -> None:
-    # Slate-blue accent (matches section header accent in chat.py)
     _ACC = "\033[38;2;99;120;192m"
 
     lines = canvas_lines(waiting_colors, active_colors, blocked_colors)
@@ -323,20 +329,25 @@ def pick_state_color(
     hint:           str = "",
     phase_slot:     str = "active",
     other_colors:   "dict | None" = None,
+    allow_clone:    bool = False,
 ) -> "dict | None":
     """
     Hue grid → scheme picker (with live Mondrian canvas preview).
     Returns a {bg, fg, bold, selbg, selfg} hex dict, or None for auto-derive.
 
-    phase_slot   : "active" or "blocked" — which canvas slot this pick fills
-    other_colors : already-configured colors for the other slot (shown statically)
+    allow_clone : show [w] Clone waiting option in the hue grid
+    phase_slot  : "active" or "blocked" — which canvas slot this pick fills
+    other_colors: already-configured colors for the other slot (shown statically)
     """
     from .colors import load_itermcolors
     from .browse import run_browser
 
+    # Maximum number of closest schemes to fetch (grows when user requests more)
+    n_results = 10
+
     while True:
         _draw_canvas_static(waiting_colors, phase_slot, other_colors)
-        print_hue_grid(dark_mode)
+        print_hue_grid(dark_mode, show_clone=allow_clone)
 
         suffix = f" (suggested: {hint})" if hint else ""
         try:
@@ -345,11 +356,17 @@ def pick_state_color(
             return None
 
         if raw not in _VALID_KEYS:
-            print(f"  Unknown choice — pick a number 1–9, h, or Enter.\n")
+            print(f"  Unknown choice — pick a number 1–9, letter (r/o/y/g/t/b/v/p/n), h, w, or Enter.\n")
             continue
 
         if raw == "":
             return None   # auto-derive
+
+        if raw == "w":
+            if allow_clone:
+                return dict(waiting_colors)   # clone waiting colors
+            print("  Unknown choice.\n")
+            continue
 
         if raw == "h":
             try:
@@ -367,37 +384,82 @@ def pick_state_color(
             target_hex   = f"#{hex_input.upper()}"
             target_label = target_hex
         else:
-            label, hf, _ = next(h for h in HUES if h[2] == raw)
+            # Match by number or letter
+            hue_entry = next(
+                (h for h in HUES if h[2] == raw or h[3] == raw),
+                None,
+            )
+            if hue_entry is None:
+                print("  Unknown choice.\n")
+                continue
+            label, hf, _, _ = hue_entry
             target_hex   = _hue_base_hex(hf, dark_mode)
             target_label = label
 
-        matches = closest_schemes(target_hex, schemes, n=6)
+        n_results = 10  # reset for new hue
+        matches = closest_schemes(target_hex, schemes, n=n_results)
         if not matches:
             print("\n  No schemes in library. Run: mondrian fetch --all\n")
             return None
 
-        result = _run_scheme_picker(
-            matches, target_hex, target_label, schemes, favorites,
-            waiting_colors, phase_slot, other_colors,
-        )
+        # Inner loop: stay in scheme picker after fetch/more without re-showing hue grid
+        while True:
+            result = _run_scheme_picker(
+                matches, target_hex, target_label, schemes, favorites,
+                waiting_colors, phase_slot, other_colors,
+            )
 
-        if result is None:
-            return None
-        elif result == "b":
-            continue   # back to hue grid
-        elif result == "j":
-            return derive_state_colors(
-                hex_to_srgb(target_hex),
-                hex_to_srgb(waiting_colors["fg"]),
-                hex_to_srgb(waiting_colors["selbg"]),
-            )
-        elif result == "m":
-            picked = run_browser(
-                schemes, favorites, load_itermcolors,
-                select_mode=True, prompt=f"Select: {phase_name}",
-            )
-            if picked:
-                return picked
-            continue   # back to hue grid after browser exits
-        else:
-            return result   # colors dict
+            if result is None:
+                return None
+
+            elif result == "b":
+                break   # back to hue grid
+
+            elif result == "j":
+                return derive_state_colors(
+                    hex_to_srgb(target_hex),
+                    hex_to_srgb(waiting_colors["fg"]),
+                    hex_to_srgb(waiting_colors["selbg"]),
+                )
+
+            elif result == "m":
+                picked = run_browser(
+                    schemes, favorites, load_itermcolors,
+                    select_mode=True, prompt=f"Select: {phase_name}",
+                )
+                if picked:
+                    return picked
+                break   # back to hue grid
+
+            elif result == "+":
+                # Show more results (double the count)
+                n_results = min(n_results * 2, len(schemes))
+                print(f"  Searching for more…", end="\r", flush=True)
+                matches = closest_schemes(target_hex, schemes, n=n_results)
+                # continue inner loop with expanded matches
+
+            elif result == "f":
+                # Fetch a scheme by name without quitting
+                sys.stdout.write(SHOW)
+                sys.stdout.flush()
+                try:
+                    name = input("  Fetch scheme name (e.g. Dracula): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    continue
+                if not name:
+                    continue
+                print(f"  Fetching '{name}' …")
+                try:
+                    from .fetch import fetch_scheme
+                    path = fetch_scheme(name)
+                    new_colors = load_itermcolors(str(path))
+                    schemes = list(schemes) + [(name, str(path))]
+                    print(f"  Added: {name} ({new_colors['bg']})")
+                    # Re-search including the new scheme
+                    matches = closest_schemes(target_hex, schemes, n=n_results)
+                except Exception as e:
+                    print(f"  Failed: {e}")
+                # continue inner loop
+
+            else:
+                return result   # colors dict

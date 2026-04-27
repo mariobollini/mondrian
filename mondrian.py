@@ -204,13 +204,16 @@ def cmd_configure() -> None:
 
     _save_config(config_data)
 
-    # Dynamic Profiles
+    # Dynamic Profiles (bake transparency so new windows open at the right opacity)
+    _tr = config_data.get("transparency") or {}
     dp_path = write_dynamic_profiles(
-        parent_guid=profile["guid"],
-        waiting=hex_to_srgb(waiting_colors["bg"]),
-        active= hex_to_srgb(active_colors["bg"]),
-        blocked=hex_to_srgb(blocked_colors["bg"]),
-        fg=    hex_to_srgb(waiting_colors["fg"]),
+        parent_guid   = profile["guid"],
+        waiting       = hex_to_srgb(waiting_colors["bg"]),
+        active        = hex_to_srgb(active_colors["bg"]),
+        blocked       = hex_to_srgb(blocked_colors["bg"]),
+        fg            = hex_to_srgb(waiting_colors["fg"]),
+        waiting_alpha = _tr.get("waiting"),
+        active_alpha  = _tr.get("active"),
     )
 
     # Hooks
@@ -356,12 +359,15 @@ def cmd_edit() -> None:
             install_hooks()
             guid = config.get("source_profile", {}).get("guid")
             if guid and "waiting_colors" in config:
+                _tr2 = config.get("transparency") or {}
                 dp = write_dynamic_profiles(
-                    parent_guid=guid,
-                    waiting=hex_to_srgb(config["waiting_colors"]["bg"]),
-                    active= hex_to_srgb(config["active_colors"]["bg"]),
-                    blocked=hex_to_srgb(config["blocked_colors"]["bg"]),
-                    fg=    hex_to_srgb(config["waiting_colors"]["fg"]),
+                    parent_guid   = guid,
+                    waiting       = hex_to_srgb(config["waiting_colors"]["bg"]),
+                    active        = hex_to_srgb(config["active_colors"]["bg"]),
+                    blocked       = hex_to_srgb(config["blocked_colors"]["bg"]),
+                    fg            = hex_to_srgb(config["waiting_colors"]["fg"]),
+                    waiting_alpha = _tr2.get("waiting"),
+                    active_alpha  = _tr2.get("active"),
                 )
                 print(f"  Dynamic profiles updated: {dp}")
             _restore_terminal_now(config)
@@ -387,9 +393,12 @@ def cmd_apply() -> None:
     blocked = hex_to_srgb(palette["blocked"])
     fg      = hex_to_srgb(config["fg"])
 
+    _tr = config.get("transparency") or {}
     path = write_dynamic_profiles(
-        parent_guid=config["source_profile"]["guid"],
-        waiting=waiting, active=active, blocked=blocked, fg=fg,
+        parent_guid   = config["source_profile"]["guid"],
+        waiting       = waiting, active=active, blocked=blocked, fg=fg,
+        waiting_alpha = _tr.get("waiting"),
+        active_alpha  = _tr.get("active"),
     )
     install_hooks()
     print(f"  Applied palette to {path} and hooks.")
@@ -654,14 +663,17 @@ def _show_menu() -> None:
         print()
 
     items = [
-        ("1", "c", "configure", "set up color states for Claude Code"),
-        ("2", "e", "edit",      "tweak processing/blocked colors, transparency"),
-        ("3", "b", "browse",    "explore schemes, manage bookmarks"),
-        ("4", "s", "status",    "show current setup"),
-        ("5", "r", "reset",     "remove all mondrian config"),
+        ("1", "configure", "set up color states for Claude Code"),
+        ("2", "edit",      "tweak processing/blocked colors, transparency"),
+        ("3", "browse",    "explore schemes, manage bookmarks"),
+        ("4", "status",    "show current setup"),
+        ("5", "reset",     "remove all mondrian config"),
     ]
-    for num, key, cmd, desc in items:
-        print(f"  {BOLD}[{num}/{key}]{RESET}  {cmd:<12}  {DIM}{desc}{RESET}")
+    for num, cmd, desc in items:
+        # Highlight the first letter of the command in brackets
+        cmd_fmt = f"{BOLD}[{cmd[0]}]{RESET}{cmd[1:]}"
+        pad     = " " * max(1, 12 - len(cmd))
+        print(f"  {DIM}{num}{RESET}  {cmd_fmt}{pad}{DIM}{desc}{RESET}")
     print()
 
     try:
@@ -676,6 +688,9 @@ def _show_menu() -> None:
         "3": cmd_browse,    "b": cmd_browse,
         "4": cmd_status,    "s": cmd_status,
         "5": cmd_reset,     "r": cmd_reset,
+        # also accept full command names
+        "configure": cmd_configure, "edit": cmd_edit,
+        "browse": cmd_browse, "status": cmd_status, "reset": cmd_reset,
     }
     dispatch.get(raw, lambda: None)()
 

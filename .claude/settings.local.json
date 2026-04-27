@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(python3 *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(gh repo *)",
+      "Bash(python *)",
+      "Read(//private/tmp/**)"
     ]
   }
 }

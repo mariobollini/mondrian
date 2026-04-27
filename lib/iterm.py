@@ -271,14 +271,20 @@ def write_dynamic_profiles(
     active: tuple,
     blocked: tuple,
     fg: tuple,
+    waiting_alpha: "float | None" = None,
+    active_alpha:  "float | None" = None,
 ) -> Path:
     """
     Write (or overwrite) the mondrian Dynamic Profiles JSON.
     Returns the path written.
+
+    waiting_alpha / active_alpha: if set, bake the transparency value into the
+    profile so new windows automatically open at the right opacity.
     """
     DYNAMIC_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
-    def profile_entry(state: str, bg: tuple, guid_suffix: str) -> dict:
+    def profile_entry(state: str, bg: tuple, guid_suffix: str,
+                      alpha: "float | None" = None) -> dict:
         entry = {
             "Name": PROFILE_NAMES[state],
             "Guid": f"mondrian-{guid_suffix}",
@@ -287,12 +293,14 @@ def write_dynamic_profiles(
         }
         if parent_guid:
             entry["Dynamic Profile Parent Name"] = _parent_name_from_guid(parent_guid)
+        if alpha is not None:
+            entry["Transparency"] = round(alpha, 4)
         return entry
 
     profiles = [
-        profile_entry("waiting", waiting, "waiting"),
-        profile_entry("active",  active,  "active"),
-        profile_entry("blocked", blocked, "blocked"),
+        profile_entry("waiting", waiting, "waiting", waiting_alpha),
+        profile_entry("active",  active,  "active",  active_alpha),
+        profile_entry("blocked", blocked, "blocked",  waiting_alpha),  # blocked inherits waiting opacity
     ]
 
     data = {"Profiles": profiles}

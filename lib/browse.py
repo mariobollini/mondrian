@@ -2,6 +2,12 @@
 Full-screen interactive scheme browser.
 
 Navigation: ↑↓ or j/k — Enter/Space = toggle bookmark — q = quit
+Rows are two display lines each: text swatches on line 1, bg color bar on line 2.
+
+Extra keys:
+  s / S     toggle sort (alphabetical ↔ by background hue)
+  /         start name prefix jump (type to jump, Esc to cancel, / to clear)
+  +         fetch a scheme by name and add to library
 """
 
 import os
@@ -16,6 +22,7 @@ _HOME   = "\033[H"
 _CLR    = "\033[2J"
 _EOL    = "\033[K"
 _BOLD   = "\033[1m"
+_DIM    = "\033[2m"
 _RESET  = "\033[0m"
 
 
@@ -39,10 +46,14 @@ def _getch() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Row rendering
+# Row rendering (2-line format)
 # ---------------------------------------------------------------------------
 
-_NAME_W = 26   # visible name column width (covers longest common scheme names)
+_NAME_W = 26    # visible name column width
+
+# Swatch: each segment 6 chars wide + ██ borders on each side = 22 visible chars
+_SW_SEG = 6
+_SW_VIS = 2 + _SW_SEG * 3 + 2   # = 22 visible chars
 
 
 def _esc(hex_val: str, layer: str) -> str:
@@ -55,10 +66,8 @@ def _esc(hex_val: str, layer: str) -> str:
 
 def _text_swatches(colors: dict) -> str:
     """
-    Three 4-char text samples that show how each rendering condition looks:
-      Aa  — normal fg text on bg
-      Bb  — bold text on bg
-      Cc  — selected text (selfg on selbg)
+    Three wide text samples with fg-colored ██ borders.
+    Total visible width: 22 chars.
     """
     BG  = _esc(colors["bg"],    "bg")
     FG  = _esc(colors["fg"],    "fg")
@@ -66,27 +75,71 @@ def _text_swatches(colors: dict) -> str:
     SBG = _esc(colors["selbg"], "bg")
     SFG = _esc(colors["selfg"], "fg")
 
-    normal = f"{BG}{FG} Aa {_RESET}"
-    bold   = f"{BG}{_BOLD}{BD} Bb {_RESET}"
-    sel    = f"{SBG}{SFG} Cc {_RESET}"
+    bdr    = f"{FG}██{_RESET}"
+    normal = f"{BG}{FG}  Aa  {_RESET}"
+    bold   = f"{BG}{_BOLD}{BD}  Bb  {_RESET}"
+    sel    = f"{SBG}{SFG}  Cc  {_RESET}"
 
-    return f"{normal}{bold}{sel}"
+    return f"{bdr}{normal}{bold}{sel}{bdr}"
 
 
-def _row(idx: int, name: str, colors: dict | None, bookmarked: bool, selected: bool) -> str:
+def _contrast_fg(hex_bg: str) -> str:
+    """Return a contrasting fg escape code for text on the given bg color."""
+    from .colors import hex_to_srgb, srgb_to_hsl
+    l = srgb_to_hsl(*hex_to_srgb(hex_bg))[2]
+    return "\033[38;2;215;220;235m" if l < 0.5 else "\033[38;2;35;40;50m"
+
+
+def _row(idx: int, name: str, colors: "dict | None",
+         bookmarked: bool, selected: bool) -> tuple[str, str]:
+    """
+    Return (line1, line2) for a 2-line scheme row.
+
+    Line 1: nav arrow + number + bookmark + name + text swatches
+    Line 2: indented wide background color bar with hex
+    """
     mark  = "★ " if bookmarked else "  "
     num   = f"{idx + 1:3d}"
     arrow = "►" if selected else " "
 
     if colors is None:
-        body = f"{mark}{name}  (unreadable)"
-    else:
-        name_str = f"{mark}{name:<{_NAME_W}}"
-        if selected:
-            name_str = f"{_BOLD}{name_str}{_RESET}"
-        body = f"{name_str}  {_text_swatches(colors)}  {colors['bg']}"
+        l1 = f"  {arrow} {num}  {mark}{name}  (unreadable){_EOL}"
+        l2 = f"{_EOL}"
+        return l1, l2
 
-    return f"  {arrow} {num}  {body}{_EOL}"
+    name_str = f"{mark}{name:<{_NAME_W}}"
+    if selected:
+        name_str = f"{_BOLD}{name_str}{_RESET}"
+
+    sw = _text_swatches(colors)
+    l1 = f"  {arrow} {num}  {name_str}  {sw}{_EOL}"
+
+    # Line 2: bg color bar aligned with swatches
+    # Indent: "  "(2) + arrow(1) + " "(1) + num(3) + "  "(2) + mark(2) + name(_NAME_W) + "  "(2) = 39
+    indent   = 2 + 1 + 1 + 3 + 2 + 2 + _NAME_W + 2
+    BG_esc   = _esc(colors["bg"], "bg")
+    txt      = _contrast_fg(colors["bg"])
+    bar_text = f" {colors['bg']} "
+    bar_pad  = " " * max(0, _SW_VIS - len(bar_text))
+    bar      = BG_esc + txt + bar_text + bar_pad + _RESET
+    l2       = " " * indent + bar + _EOL
+
+    return l1, l2
+
+
+# ---------------------------------------------------------------------------
+# Hue sort key
+# ---------------------------------------------------------------------------
+
+def _hue_sort_key(colors: "dict | None") -> tuple:
+    """Sort: colorful schemes first by hue, then grays by lightness, unreadable last."""
+    if colors is None:
+        return (2, 0.0, 0.0)
+    from .colors import hex_to_srgb, srgb_to_hsl
+    h, s, l = srgb_to_hsl(*hex_to_srgb(colors["bg"]))
+    if s < 0.12:
+        return (1, l, 0.0)
+    return (0, h, l)
 
 
 # ---------------------------------------------------------------------------
@@ -104,42 +157,37 @@ def run_browser(
     """
     Run the full-screen browser.
 
-    Bookmark mode (select_mode=False, default):
-      Returns the (possibly updated) favorites set.
-
-    Select mode (select_mode=True):
-      Enter picks the highlighted scheme and returns its colors dict.
-      Returns dict on selection, None if cancelled (q).
-
-    schemes     : [(name, path), ...]
-    load_fn     : callable(path) -> {bg, fg, bold, selbg, selfg} hex dict
-    live_filter : (bookmark mode) splice out items when un-bookmarked
-    select_mode : Enter picks instead of toggling bookmark
-    prompt      : shown in header when select_mode=True (e.g. "Pick: Waiting")
+    Bookmark mode (select_mode=False):  returns updated favorites set.
+    Select mode (select_mode=True):     returns colors dict on Enter, None on q.
     """
     if not schemes:
         return None if select_mode else favorites
 
-    schemes = list(schemes)  # work with a local copy so live_filter splices are safe
-    cache:  dict = {}
-    cursor: int  = 0
-    vtop:   int  = 0
-    _selected = None
+    schemes      = list(schemes)
+    orig_schemes = list(schemes)   # saved for sort-by-name reset
+    cache: dict  = {}
+    cursor       = 0
+    vtop         = 0
+    _selected    = None
+    sort_by_hue  = False
+    jump_mode    = False   # True while user is typing a name prefix to jump
+    jump_buf     = ""
 
     def colors_for(i: int):
         if i not in cache:
             entry = schemes[i][1]
-            if isinstance(entry, dict):  # pre-loaded colors (e.g. from iTerm2 plist presets)
-                cache[i] = entry
-            else:
-                try:
-                    cache[i] = load_fn(entry)
-                except Exception:
-                    cache[i] = None
+            cache[i] = entry if isinstance(entry, dict) else _try_load(entry)
         return cache[i]
 
+    def _try_load(entry):
+        try:
+            return load_fn(entry)
+        except Exception:
+            return None
+
     def ui_h() -> int:
-        return max(1, os.get_terminal_size().lines - 6)  # 4 header + 2 footer
+        """Scheme rows visible (each scheme = 2 display lines)."""
+        return max(1, (os.get_terminal_size().lines - 6) // 2)
 
     def scroll():
         nonlocal vtop
@@ -156,28 +204,30 @@ def run_browser(
         end = min(vtop + h, len(schemes))
         fc  = sum(1 for n, _ in schemes if n in favorites)
 
-        _DIM   = "\033[2m"
-        _RESET = "\033[0m"
-        _BOLD  = "\033[1m"
+        sort_label = "hue" if sort_by_hue else "name"
+        jump_hint  = f"  /{jump_buf}▌" if jump_mode else ""
 
         buf = [_HOME]
         if select_mode:
-            header = f"  {_BOLD}{prompt}{_RESET}  {_DIM}—  {len(schemes)} schemes · {fc} bookmarked{_RESET}"
+            header = f"  {_BOLD}{prompt}{_RESET}  {_DIM}—  {len(schemes)} schemes · {fc} ★{_RESET}"
             action = "Enter = select"
         else:
-            header = f"  {_BOLD}{len(schemes)} schemes{_RESET}  {_DIM}· {fc} bookmarked{_RESET}"
+            header = f"  {_BOLD}{len(schemes)} schemes{_RESET}  {_DIM}· {fc} ★ · sort: {sort_label}{_RESET}"
             action = "Enter = bookmark"
         buf.append(f"{header}{_EOL}")
-        buf.append(f"  {_DIM}Aa fg · Bb bold · Cc selected{_RESET}{_EOL}")
-        buf.append(f"  {_DIM}↑↓ jk navigate · {action} · PgUp/Dn · g/G first/last · q {'cancel' if select_mode else 'done'}{_RESET}{_EOL}")
+        buf.append(f"  {_DIM}Aa normal · Bb bold · Cc selected{_RESET}{_EOL}")
+        buf.append(f"  {_DIM}↑↓ jk · {action} · s sort · / jump{jump_hint} · + fetch · q {'cancel' if select_mode else 'done'}{_RESET}{_EOL}")
         buf.append(_EOL)
 
         for i in range(vtop, end):
-            buf.append(_row(i, schemes[i][0], colors_for(i),
-                            bookmarked=(schemes[i][0] in favorites),
-                            selected=(i == cursor)))
+            l1, l2 = _row(i, schemes[i][0], colors_for(i),
+                           bookmarked=(schemes[i][0] in favorites),
+                           selected=(i == cursor))
+            buf.append(l1)
+            buf.append(l2)
 
-        for _ in range(h - (end - vtop)):      # blank remaining rows
+        for _ in range(h - (end - vtop)):
+            buf.append(_EOL)
             buf.append(_EOL)
 
         buf.append(_EOL)
@@ -186,6 +236,47 @@ def run_browser(
         sys.stdout.write("\n".join(buf))
         sys.stdout.flush()
 
+    # -------------------------------------------------------------------------
+    # Jump helpers
+    # -------------------------------------------------------------------------
+    def _jump_to(q: str):
+        nonlocal cursor
+        if not q:
+            return
+        ql = q.lower()
+        for i, (name, _) in enumerate(schemes):
+            if name.lower().startswith(ql):
+                cursor = i
+                scroll()
+                return
+
+    # -------------------------------------------------------------------------
+    # Sort helpers
+    # -------------------------------------------------------------------------
+    def _sort_hue():
+        nonlocal schemes, cache, cursor, vtop, sort_by_hue
+        sys.stdout.write(f"{_HOME}  Loading colors for hue sort…{_EOL}\n")
+        sys.stdout.flush()
+        for i in range(len(schemes)):
+            colors_for(i)
+        idx = sorted(range(len(schemes)), key=lambda i: _hue_sort_key(cache.get(i)))
+        schemes     = [schemes[i] for i in idx]
+        cache       = {j: cache[idx[j]] for j in range(len(idx)) if idx[j] in cache}
+        sort_by_hue = True
+        cursor = 0
+        vtop   = 0
+
+    def _sort_name():
+        nonlocal schemes, cache, cursor, vtop, sort_by_hue
+        id_map  = {id(s): cache.get(i) for i, s in enumerate(schemes)}
+        schemes = list(orig_schemes)
+        cache   = {i: id_map[id(s)] for i, s in enumerate(schemes)
+                   if id(s) in id_map and id_map[id(s)] is not None}
+        sort_by_hue = False
+        cursor = 0
+        vtop   = 0
+
+    # -------------------------------------------------------------------------
     sys.stdout.write(_HIDE + _CLR)
     sys.stdout.flush()
 
@@ -195,13 +286,32 @@ def run_browser(
         while True:
             key = _getch()
 
-            if key in ("q", "Q", "\x03"):               # quit / cancel
+            # In jump mode: printable chars extend the query
+            if jump_mode and len(key) == 1 and 0x20 <= ord(key) <= 0x7e and key not in ("\x1b",):
+                if key == "\x7f" or key == "\x08":
+                    jump_buf = jump_buf[:-1]
+                elif key == "/":
+                    jump_mode = False
+                    jump_buf  = ""
+                else:
+                    jump_buf += key
+                    _jump_to(jump_buf)
+                draw()
+                continue
+
+            if key in ("q", "Q", "\x03"):
                 break
+
             elif key in ("\r", "\n", " "):
+                if jump_mode:
+                    jump_mode = False
+                    jump_buf  = ""
+                    draw()
+                    continue
                 if select_mode:
                     _selected = colors_for(cursor)
                     break
-                else:                                   # toggle bookmark
+                else:
                     name = schemes[cursor][0]
                     if name in favorites:
                         favorites.discard(name)
@@ -214,23 +324,78 @@ def run_browser(
                     else:
                         favorites.add(name)
                     draw()
-            elif key in ("\x1b[A", "\x1bOA", "k"):     # up
+
+            elif key in ("\x1b[A", "\x1bOA", "k"):
                 cursor = max(0, cursor - 1)
                 draw()
-            elif key in ("\x1b[B", "\x1bOB", "j"):     # down
+
+            elif key in ("\x1b[B", "\x1bOB", "j"):
                 cursor = min(len(schemes) - 1, cursor + 1)
                 draw()
-            elif key in ("\x1b[5~",):                   # page up
+
+            elif key in ("\x1b[5~",):
                 cursor = max(0, cursor - ui_h())
                 draw()
-            elif key in ("\x1b[6~",):                   # page down
+
+            elif key in ("\x1b[6~",):
                 cursor = min(len(schemes) - 1, cursor + ui_h())
                 draw()
-            elif key in ("g", "\x1b[H", "\x1b[1~"):    # first
+
+            elif key in ("g", "\x1b[H", "\x1b[1~"):
                 cursor = 0
                 draw()
-            elif key in ("G", "\x1b[F", "\x1b[4~"):    # last
+
+            elif key in ("G", "\x1b[F", "\x1b[4~"):
                 cursor = len(schemes) - 1
+                draw()
+
+            elif key in ("s", "S"):
+                if sort_by_hue:
+                    _sort_name()
+                else:
+                    _sort_hue()
+                draw()
+
+            elif key == "/":
+                jump_mode = not jump_mode
+                if not jump_mode:
+                    jump_buf = ""
+                draw()
+
+            elif key == "\x1b":
+                if jump_mode:
+                    jump_mode = False
+                    jump_buf  = ""
+                    draw()
+
+            elif key in ("\x7f", "\x08"):
+                if jump_mode and jump_buf:
+                    jump_buf = jump_buf[:-1]
+                    _jump_to(jump_buf)
+                    draw()
+
+            elif key == "+":
+                # Fetch a scheme by name without quitting the browser
+                sys.stdout.write(_SHOW)
+                sys.stdout.flush()
+                rows = os.get_terminal_size().lines
+                sys.stdout.write(f"\033[{rows};1H\033[K")
+                sys.stdout.flush()
+                try:
+                    name = input("  Fetch scheme: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    name = ""
+                sys.stdout.write(_HIDE)
+                sys.stdout.flush()
+                if name:
+                    try:
+                        from .fetch import fetch_scheme
+                        path = fetch_scheme(name)
+                        entry = str(path)
+                        schemes.append((name, entry))
+                        orig_schemes.append((name, entry))
+                    except Exception:
+                        pass
                 draw()
 
     finally:

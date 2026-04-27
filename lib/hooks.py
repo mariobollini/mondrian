@@ -111,15 +111,14 @@ def _blocked_cmd(
     Notification hook: only show blocked if Stop fired >grace seconds ago
     (filters the spurious Notification at the end of normal responses).
 
-    waiting_alpha: if set, resets transparency to this value so red is fully
-    visible even when coming from an active state with high transparency.
+    Transparency is intentionally NOT changed here — it persists from whatever
+    state the terminal was in (usually active).  This keeps the user's configured
+    transparency level across all state transitions.
 
     If expire > 0, a background subshell auto-restores waiting colors after
-    that many seconds — unless Stop or a new UserPromptSubmit has fired in
-    the meantime.
+    that many seconds — unless Stop or a new UserPromptSubmit has fired.
     """
-    send          = _send_seq(_colors_seq(**colors))
-    opacity_reset = f"; {_transparency_stmt(waiting_alpha)}" if waiting_alpha is not None else ""
+    send = _send_seq(_colors_seq(**colors))
 
     # Always stamp the blocked file — the shell focus-restore hook reads it.
     # A unique timestamp lets the auto-expire subshell detect superseded blocks.
@@ -129,14 +128,14 @@ def _blocked_cmd(
         inner = (
             f"NOW=$(date +%s); "
             f"echo $NOW > {BLOCKED_TS_FILE}; "
-            f"{send}{opacity_reset}; "
+            f"{send}; "
             f"(sleep {expire}; "
             f"BT=$(cat {BLOCKED_TS_FILE} 2>/dev/null||echo 0); "
             f"ST=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "
             f'[ "$BT" = "$NOW" ] && [ $ST -lt $BT ] && {w_restore}) &'
         )
     else:
-        inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}{opacity_reset}"
+        inner = f"echo $(date +%s) > {BLOCKED_TS_FILE}; {send}"
 
     return (
         f"ts=$(cat {STOP_TS_FILE} 2>/dev/null||echo 0); "

@@ -152,10 +152,13 @@ def configure_phases(profile: dict) -> "tuple | None":
         "Processing", schemes, favorites, waiting_colors, dark_mode,
         hint="blue [6]",
         phase_slot="active", other_colors=None,
+        allow_clone=True,
     )
     if active_colors is None:
         active_colors = auto_active(waiting_colors)
         print(f"  {DIM}Auto-derived  →{RESET}  {active_colors['bg']}\n")
+    elif active_colors.get("bg") == waiting_colors.get("bg"):
+        print(f"  {DIM}Clone waiting — transparency will be the only signal.{RESET}\n")
 
     # ── Phase 3: Blocked ─────────────────────────────────────────────────
     section(
