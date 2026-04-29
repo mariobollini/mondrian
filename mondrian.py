@@ -180,6 +180,7 @@ def cmd_configure() -> None:
             pass
 
     # Build and save config
+    active_is_clone = active_colors.get("bg") == waiting_colors.get("bg")
     config_data: dict = {
         "source_profile": {"guid": profile["guid"], "name": profile["name"]},
         "palette": {
@@ -201,6 +202,8 @@ def cmd_configure() -> None:
         config_data["blocked_expire"] = blocked_expire
     if not blocked_enabled:
         config_data["blocked_enabled"] = False
+    if active_is_clone:
+        config_data["active_is_clone"] = True
 
     _save_config(config_data)
 
@@ -244,7 +247,7 @@ def cmd_edit() -> None:
     from lib.iterm import write_dynamic_profiles, query_terminal_transparency
     from lib.hooks import install_hooks
     from lib.chat import _get_all_schemes, _pick_transparency
-    from lib.colors import srgb_to_hex, hex_to_srgb, srgb_to_hsl
+    from lib.colors import srgb_to_hex, hex_to_srgb, srgb_to_hsl, derive_palette, derive_state_colors
     from lib.picker import pick_state_color
 
     config = _load_config()
@@ -270,16 +273,23 @@ def cmd_edit() -> None:
         wc  = config.get("waiting_colors",  {})
         ac  = config.get("active_colors",   {})
         bc  = config.get("blocked_colors",  {})
+        pc  = config.get("pause_colors")
         tr  = config.get("transparency") or {}
         be  = config.get("blocked_enabled", True)
         exp = config.get("blocked_expire",  0)
+        pto = config.get("pause_timeout", 3600)
+        is_clone = config.get("active_is_clone", False)
 
         tr_str  = f"{tr.get('active', 0):.0%} while processing" if tr else "off"
         exp_str = f"{exp}s" if exp else "off"
         be_str  = "on" if be else f"{DIM}off{RESET}"
+        ac_str  = f"(clone waiting, transparency only)" if is_clone else ac.get("bg", "—")
+        pc_str  = pc["bg"] if pc else f"{DIM}off{RESET}"
+        pto_str = f"{pto}s" if pc else f"{DIM}—{RESET}"
 
         a_sw = swatches(ac) if ac else "                "
         b_sw = swatches(bc) if bc else "                "
+        p_sw = swatches(pc) if pc else "                "
 
         banner(
             waiting_hex  = wc.get("bg") if wc else None,
@@ -287,11 +297,12 @@ def cmd_edit() -> None:
             blocked_hex  = bc.get("bg") if bc else None,
             subtitle     = "edit",
         )
-        print(f"  {BOLD}[1]{RESET}  {a_sw}  Processing   {DIM}{ac.get('bg', '—')}{RESET}")
+        print(f"  {BOLD}[1]{RESET}  {a_sw}  Processing   {DIM}{ac_str}{RESET}")
         print(f"  {BOLD}[2]{RESET}  {b_sw}  Blocked      {DIM}{bc.get('bg', '—')}{RESET}  ·  {be_str}")
         print(f"  {BOLD}[3]{RESET}  Toggle blocked      currently {be_str}")
         print(f"  {BOLD}[4]{RESET}  Transparency        {tr_str}")
-        print(f"  {BOLD}[5]{RESET}  Auto-clear          {exp_str}")
+        print(f"  {BOLD}[5]{RESET}  Auto-clear blocked  {exp_str}")
+        print(f"  {BOLD}[6]{RESET}  {p_sw}  Pause color  {pc_str}  ·  idle {pto_str}")
         print()
         print(f"  {BOLD}[a]{RESET}  Apply and save")
         print(f"  {BOLD}[q]{RESET}  Quit without saving")
@@ -310,11 +321,17 @@ def cmd_edit() -> None:
             sc, fav = _get_schemes()
             picked = pick_state_color(
                 "Processing", sc, fav, wc, _dark(), hint="blue [6]",
-                phase_slot="active", other_colors=bc,
+                phase_slot="active", other_colors=bc, allow_clone=True,
             )
             if picked:
                 config["active_colors"]     = picked
                 config["palette"]["active"] = picked["bg"]
+                is_clone_now = picked.get("bg") == wc.get("bg")
+                if is_clone_now:
+                    config["active_is_clone"] = True
+                    print(f"  {DIM}Clone waiting — transparency will be the only signal.{RESET}\n")
+                else:
+                    config.pop("active_is_clone", None)
 
         elif raw == "2":
             sc, fav = _get_schemes()
@@ -338,6 +355,18 @@ def cmd_edit() -> None:
                 config["transparency"] = tr_new
             else:
                 config.pop("transparency", None)
+                # Clone-waiting mode depends on transparency as the only signal.
+                # With transparency gone, auto-derive a real active color.
+                if config.get("active_is_clone"):
+                    wc2 = config.get("waiting_colors", {})
+                    fg_t    = hex_to_srgb(wc2.get("fg", "#101010"))
+                    selbg_t = hex_to_srgb(wc2.get("selbg", "#B3D7FF"))
+                    pal = derive_palette(hex_to_srgb(wc2.get("bg", "#FAFAFA")))
+                    auto_ac = derive_state_colors(pal["B"]["active"], fg_t, selbg_t)
+                    config["active_colors"]     = auto_ac
+                    config.get("palette", {})["active"] = auto_ac["bg"]
+                    config.pop("active_is_clone", None)
+                    print(f"  Clone-waiting mode off — auto-derived active: {auto_ac['bg']}")
                 print("  Transparency off.")
 
         elif raw == "5":
@@ -353,6 +382,37 @@ def cmd_edit() -> None:
                     print(f"  Will auto-clear after {n}s.")
             except (ValueError, EOFError, KeyboardInterrupt):
                 pass
+
+        elif raw == "6":
+            # Pause / idle color
+            sc, fav = _get_schemes()
+            print()
+            print("  Pause color: shown when the session is idle for a while,")
+            print("  or manually via  mondrian pause  (or ask Claude to pause).")
+            print()
+            picked = pick_state_color(
+                "Pause", sc, fav, wc, _dark(), hint="dark/dim [9]",
+                phase_slot="active", other_colors=None,
+            )
+            if picked:
+                config["pause_colors"] = picked
+                try:
+                    v = input(f"  Idle timeout in seconds [3600]: ").strip()
+                    n = int(v) if v else 3600
+                    config["pause_timeout"] = max(60, n)
+                except (ValueError, EOFError, KeyboardInterrupt):
+                    config["pause_timeout"] = 3600
+                print(f"  Pause after {config['pause_timeout']}s of inactivity.")
+            else:
+                if pc:
+                    try:
+                        off = input("  Remove pause color? [y/N]: ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        off = ""
+                    if off == "y":
+                        config.pop("pause_colors", None)
+                        config.pop("pause_timeout", None)
+                        print("  Pause color removed.")
 
         elif raw == "a":
             _save_config(config)
@@ -462,6 +522,76 @@ def cmd_status() -> None:
     print()
 
 
+def cmd_pause() -> None:
+    """Manually set the terminal to the pause/parked color."""
+    from lib.tui import DIM, RESET
+    config = _load_config()
+    pause_colors = config.get("pause_colors")
+    if not pause_colors:
+        print(f"\n  No pause color configured.  Add one via:  mondrian edit  [6]\n")
+        return
+    import subprocess
+    from lib.hooks import _colors_seq, _send_seq
+    seq = _send_seq(_colors_seq(**pause_colors))
+    subprocess.run(seq, shell=True)
+    print(f"\n  Parked  →  {pause_colors['bg']}\n")
+    print(f"  {DIM}Next Claude Code message will restore normal colors.{RESET}\n")
+
+
+def cmd_log() -> None:
+    """Append a timestamped note to today's mondrian log.
+
+    Intended for Claude Code to flag moments when behavior seemed wrong:
+      mondrian log 'active state stuck for 30s after Stop fired'
+    """
+    from datetime import datetime
+    message = " ".join(sys.argv[2:]).strip()
+    if not message:
+        print("  Usage: mondrian log <message>")
+        print("  Example: mondrian log 'active state stuck after Stop'")
+        return
+    log_dir = Path("~/.mondrian/logs").expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    log_file = log_dir / f"{now.strftime('%Y-%m-%d')}.log"
+    with open(log_file, "a") as f:
+        f.write(f"{now.strftime('%H:%M:%S')} NOTE: {message}\n")
+    print(f"  Logged → {log_file}")
+
+
+def cmd_logs() -> None:
+    """Show today's mondrian log (falls back to most recent day if no log today)."""
+    from datetime import datetime
+    log_dir = Path("~/.mondrian/logs").expanduser()
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    log_file = log_dir / f"{today}.log"
+
+    if not log_file.exists():
+        log_files = sorted(log_dir.glob("*.log")) if log_dir.exists() else []
+        if log_files:
+            log_file = log_files[-1]
+            print(f"\n  (No log for {today} — showing {log_file.name})\n")
+        else:
+            print(f"\n  No mondrian logs found in {log_dir}\n")
+            return
+    else:
+        print(f"\n  {log_file}\n")
+
+    content = log_file.read_text()
+    if not content.strip():
+        print("  (empty)\n")
+        return
+
+    lines = content.splitlines()
+    if len(lines) > 60:
+        print(f"  (last 60 of {len(lines)} lines)\n")
+        lines = lines[-60:]
+    for line in lines:
+        print(f"  {line}")
+    print()
+
+
 def cmd_reset() -> None:
     from lib.iterm import remove_dynamic_profiles
     from lib.hooks import uninstall_hooks
@@ -482,7 +612,10 @@ def cmd_reset() -> None:
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
 
-    for tmp in ("/tmp/.mondrian_stop", "/tmp/.mondrian_blocked", "/tmp/.mondrian_suppress"):
+    for tmp in (
+        "/tmp/.mondrian_stop", "/tmp/.mondrian_blocked",
+        "/tmp/.mondrian_suppress", "/tmp/.mondrian_idle_start", "/tmp/.mondrian_idle_pid",
+    ):
         p = Path(tmp)
         if p.exists():
             p.unlink()
@@ -631,6 +764,9 @@ COMMANDS = {
     "status":    cmd_status,
     "fetch":     cmd_fetch,
     "browse":    cmd_browse,
+    "pause":     cmd_pause,
+    "log":       cmd_log,
+    "logs":      cmd_logs,
     "reset":     cmd_reset,
     "uninstall": cmd_uninstall,
 }
@@ -688,9 +824,10 @@ def _show_menu() -> None:
         "3": cmd_browse,    "b": cmd_browse,
         "4": cmd_status,    "s": cmd_status,
         "5": cmd_reset,     "r": cmd_reset,
-        # also accept full command names
+        # full command names
         "configure": cmd_configure, "edit": cmd_edit,
         "browse": cmd_browse, "status": cmd_status, "reset": cmd_reset,
+        "pause": cmd_pause, "log": cmd_log, "logs": cmd_logs,
     }
     dispatch.get(raw, lambda: None)()
 
