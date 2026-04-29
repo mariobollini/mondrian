@@ -191,6 +191,40 @@ def configure_phases(profile: dict) -> "tuple | None":
         query_terminal_transparency, required=transparency_required,
     )
 
+    # ── Phase 5: Pause ───────────────────────────────────────────────────
+    section(
+        "Pause",
+        "Optional idle color — shown after inactivity or via 'mondrian pause'.",
+    )
+
+    pause_colors  = None
+    pause_timeout = 3600
+
+    try:
+        raw = input("  Enable pause/idle state? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+
+    if raw == "y":
+        picked_pause = pick_state_color(
+            "Pause", schemes, favorites, waiting_colors, dark_mode,
+            hint="dark/dim [9]",
+            phase_slot="active", other_colors=None,
+        )
+        if picked_pause:
+            pause_colors = picked_pause
+            try:
+                raw_t = input("  Idle timeout in seconds [3600]: ").strip()
+                pause_timeout = int(raw_t) if raw_t else 3600
+                pause_timeout = max(60, pause_timeout)
+            except (ValueError, EOFError, KeyboardInterrupt):
+                pause_timeout = 3600
+            print(f"  {DIM}Pause after {pause_timeout}s  →{RESET}  {pause_colors['bg']}\n")
+        else:
+            print(f"  {DIM}Skipped.{RESET}\n")
+    else:
+        print(f"  {DIM}Skipped.{RESET}\n")
+
     # ── Review + confirm ─────────────────────────────────────────────────
     if not print_review_and_confirm(
         waiting_colors, active_colors, blocked_colors, transparency_config
@@ -198,4 +232,8 @@ def configure_phases(profile: dict) -> "tuple | None":
         print("  Cancelled.\n")
         return None
 
-    return waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled
+    return (
+        waiting_colors, active_colors, blocked_colors,
+        transparency_config, blocked_enabled,
+        pause_colors, pause_timeout,
+    )

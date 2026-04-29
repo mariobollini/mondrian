@@ -161,7 +161,7 @@ def cmd_configure() -> None:
     result = configure_phases(profile)
     if result is None:
         return
-    waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled = result
+    waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled, pause_colors, pause_timeout = result
 
     # Optional: auto-clear blocked state after N seconds
     print()
@@ -204,6 +204,9 @@ def cmd_configure() -> None:
         config_data["blocked_enabled"] = False
     if active_is_clone:
         config_data["active_is_clone"] = True
+    if pause_colors:
+        config_data["pause_colors"]  = pause_colors
+        config_data["pause_timeout"] = pause_timeout
 
     _save_config(config_data)
 
@@ -297,15 +300,17 @@ def cmd_edit() -> None:
             blocked_hex  = bc.get("bg") if bc else None,
             subtitle     = "edit",
         )
-        print(f"  {BOLD}[1]{RESET}  {a_sw}  Processing   {DIM}{ac_str}{RESET}")
-        print(f"  {BOLD}[2]{RESET}  {b_sw}  Blocked      {DIM}{bc.get('bg', '—')}{RESET}  ·  {be_str}")
-        print(f"  {BOLD}[3]{RESET}  Toggle blocked      currently {be_str}")
-        print(f"  {BOLD}[4]{RESET}  Transparency        {tr_str}")
-        print(f"  {BOLD}[5]{RESET}  Auto-clear blocked  {exp_str}")
-        print(f"  {BOLD}[6]{RESET}  {p_sw}  Pause color  {pc_str}  ·  idle {pto_str}")
+        # Shortcuts: p=Processing, b=Blocked, t=Transparency (toggle/auto/pause
+        # start with conflicting letters so kept as number-only).
+        print(f"  {DIM}1{RESET}  {BOLD}[p]{RESET}rocessing   {a_sw}  {DIM}{ac_str}{RESET}")
+        print(f"  {DIM}2{RESET}  {BOLD}[b]{RESET}locked       {b_sw}  {DIM}{bc.get('bg', '—')}{RESET}  ·  {be_str}")
+        print(f"  {DIM}3{RESET}     toggle blocked       {DIM}currently {be_str}{RESET}")
+        print(f"  {DIM}4{RESET}  {BOLD}[t]{RESET}ransparency  {DIM}{tr_str}{RESET}")
+        print(f"  {DIM}5{RESET}     auto-clear           {DIM}{exp_str}{RESET}")
+        print(f"  {DIM}6{RESET}     pause color    {p_sw}  {DIM}{pc_str}  ·  idle {pto_str}{RESET}")
         print()
-        print(f"  {BOLD}[a]{RESET}  Apply and save")
-        print(f"  {BOLD}[q]{RESET}  Quit without saving")
+        print(f"     {BOLD}[a]{RESET}pply and save")
+        print(f"     {BOLD}[q]{RESET}uit without saving")
         print()
 
         try:
@@ -314,10 +319,10 @@ def cmd_edit() -> None:
             print()
             return
 
-        if raw == "q":
+        if raw in ("q",):
             return
 
-        if raw == "1":
+        if raw in ("1", "p"):
             sc, fav = _get_schemes()
             picked = pick_state_color(
                 "Processing", sc, fav, wc, _dark(), hint="blue [6]",
@@ -333,7 +338,7 @@ def cmd_edit() -> None:
                 else:
                     config.pop("active_is_clone", None)
 
-        elif raw == "2":
+        elif raw in ("2", "b"):
             sc, fav = _get_schemes()
             picked = pick_state_color(
                 "Blocked", sc, fav, wc, _dark(), hint="red [1]",
@@ -344,12 +349,12 @@ def cmd_edit() -> None:
                 config["palette"]["blocked"] = picked["bg"]
                 config["blocked_enabled"]    = True
 
-        elif raw == "3":
+        elif raw in ("3",):
             be = not be
             config["blocked_enabled"] = be
             print(f"  Blocked indicator {'enabled' if be else 'disabled'}.")
 
-        elif raw == "4":
+        elif raw in ("4", "t"):
             tr_new = _pick_transparency(query_terminal_transparency)
             if tr_new:
                 config["transparency"] = tr_new
@@ -369,7 +374,7 @@ def cmd_edit() -> None:
                     print(f"  Clone-waiting mode off — auto-derived active: {auto_ac['bg']}")
                 print("  Transparency off.")
 
-        elif raw == "5":
+        elif raw in ("5",):
             try:
                 v = input("  Seconds before auto-clear (0 = off): ").strip()
                 n = int(v)
@@ -660,19 +665,21 @@ def cmd_fetch() -> None:
 def _fetch_submenu() -> None:
     from lib.fetch import fetch_scheme, fetch_all_schemes, list_local_schemes, SCHEMES_DIR
 
+    from lib.tui import BOLD, DIM, RESET
     local_count = len(list_local_schemes())
     print(f"\n  Fetch from mbadolato/iTerm2-Color-Schemes")
     print(f"  Library: {local_count} schemes in {SCHEMES_DIR}\n")
-    print("  [1] Search by name  (e.g. Dracula, Tokyo Night)")
-    print("  [2] Fetch all       (~500 schemes, ~3 MB)")
-    print("  [q] Back\n")
+    print(f"  {DIM}1{RESET}  {BOLD}[s]{RESET}earch by name  {DIM}e.g. Dracula, Tokyo Night{RESET}")
+    print(f"  {DIM}2{RESET}  {BOLD}[f]{RESET}etch all       {DIM}~500 schemes, ~3 MB{RESET}")
+    print(f"     {BOLD}[q]{RESET}uit / back")
+    print()
 
     try:
         raw = input("  > ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
 
-    if raw == "1":
+    if raw in ("1", "s"):
         try:
             name = input("  Name: ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -686,7 +693,7 @@ def _fetch_submenu() -> None:
         except Exception as e:
             print(f"  Failed: {e}\n", file=sys.stderr)
 
-    elif raw == "2":
+    elif raw in ("2", "f"):
         print("\n  Fetching all schemes …\n")
 
         def progress(i, total, name):
@@ -714,11 +721,13 @@ def cmd_browse() -> None:
             parts.append(f"{plist_count} from iTerm2 prefs")
         total_label = " + ".join(parts)
 
+        from lib.tui import BOLD, DIM, RESET
         print(f"\n  Browse  {total_label}  ·  {fav_count} bookmarked\n")
-        print("  [A] All schemes")
-        print("  [F] Favorites")
-        print("  [+] Fetch more from iTerm2-Color-Schemes")
-        print("  [q] Quit\n")
+        print(f"  {BOLD}[a]{RESET}ll schemes")
+        print(f"  {BOLD}[f]{RESET}avorites")
+        print(f"  {BOLD}[+]{RESET} fetch more from iTerm2-Color-Schemes")
+        print(f"  {BOLD}[q]{RESET}uit")
+        print()
 
         try:
             mode = input("  > ").strip().upper()
