@@ -305,7 +305,7 @@ def cmd_edit() -> None:
         print(f"  {DIM}3{RESET}  {BOLD}[o]{RESET}n/off        {DIM}toggle blocked indicator{RESET}")
         print(f"  {DIM}4{RESET}  {BOLD}[t]{RESET}ransparency  {DIM}{tr_str}{RESET}")
         print(f"  {DIM}5{RESET}  {BOLD}[e]{RESET}xpire        {DIM}auto-clear blocked  ·  {exp_str}{RESET}")
-        print(f"  {DIM}6{RESET}  {BOLD}[i]{RESET}dle          {p_sw}  {DIM}{pc_str}  ·  {pto_str}{RESET}")
+        print(f"  {DIM}6{RESET}  {BOLD}[i]{RESET}dle / pause  {p_sw}  {DIM}{pc_str}  ·  {pto_str}{RESET}")
         print()
         print(f"     {BOLD}[a]{RESET}pply and save")
         print(f"     {BOLD}[q]{RESET}uit without saving")
