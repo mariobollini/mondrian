@@ -273,10 +273,15 @@ def _run_scheme_picker(
 # ---------------------------------------------------------------------------
 
 def print_review(
-    waiting_colors: dict,
-    active_colors:  dict,
-    blocked_colors: dict,
-    transparency:   dict,
+    waiting_colors:  dict,
+    active_colors:   dict,
+    blocked_colors:  dict,
+    transparency:    dict,
+    *,
+    blocked_enabled: bool = True,
+    blocked_expire:  int  = 0,
+    pause_colors:    "dict | None" = None,
+    pause_timeout:   int  = 3600,
 ) -> None:
     _ACC = "\033[38;2;99;120;192m"
 
@@ -286,12 +291,23 @@ def print_review(
     for line in lines:
         print(line)
     print()
-    for label, colors in [
-        ("Waiting    ", waiting_colors),
-        ("Processing ", active_colors),
-        ("Blocked    ", blocked_colors),
-    ]:
-        print(f"  {DIM}{label}{RESET}  {text_swatches(colors)}  {DIM}{colors['bg']}{RESET}")
+
+    # Waiting + Processing rows
+    print(f"  {DIM}Waiting    {RESET}  {text_swatches(waiting_colors)}  {DIM}{waiting_colors['bg']}{RESET}")
+    print(f"  {DIM}Processing {RESET}  {text_swatches(active_colors)}  {DIM}{active_colors['bg']}{RESET}")
+
+    # Blocked row with enabled/expire annotation
+    blocked_note = ""
+    if not blocked_enabled:
+        blocked_note = f"  {DIM}(disabled){RESET}"
+    elif blocked_expire:
+        blocked_note = f"  {DIM}auto-clear {blocked_expire}s{RESET}"
+    print(f"  {DIM}Blocked    {RESET}  {text_swatches(blocked_colors)}  {DIM}{blocked_colors['bg']}{RESET}{blocked_note}")
+
+    # Pause row (optional)
+    if pause_colors:
+        print(f"  {DIM}Pause      {RESET}  {text_swatches(pause_colors)}  {DIM}{pause_colors['bg']}  ·  idle {pause_timeout}s{RESET}")
+
     print()
     if transparency:
         wa = transparency.get("waiting", 0)
@@ -303,12 +319,21 @@ def print_review(
 
 
 def print_review_and_confirm(
-    waiting_colors: dict,
-    active_colors:  dict,
-    blocked_colors: dict,
-    transparency:   dict,
+    waiting_colors:  dict,
+    active_colors:   dict,
+    blocked_colors:  dict,
+    transparency:    dict,
+    *,
+    blocked_enabled: bool = True,
+    blocked_expire:  int  = 0,
+    pause_colors:    "dict | None" = None,
+    pause_timeout:   int  = 3600,
 ) -> bool:
-    print_review(waiting_colors, active_colors, blocked_colors, transparency)
+    print_review(
+        waiting_colors, active_colors, blocked_colors, transparency,
+        blocked_enabled=blocked_enabled, blocked_expire=blocked_expire,
+        pause_colors=pause_colors, pause_timeout=pause_timeout,
+    )
     try:
         raw = input("  Apply? [Y/n]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):

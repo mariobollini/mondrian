@@ -161,23 +161,7 @@ def cmd_configure() -> None:
     result = configure_phases(profile)
     if result is None:
         return
-    waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled, pause_colors, pause_timeout = result
-
-    # Optional: auto-clear blocked state after N seconds
-    print()
-    try:
-        raw = input(
-            "  Auto-clear blocked/red after N seconds? [e.g. 90, or Enter to skip]: "
-        ).strip()
-    except (EOFError, KeyboardInterrupt):
-        raw = ""
-    blocked_expire = 0
-    if raw:
-        try:
-            blocked_expire = max(10, int(raw))
-            print(f"  Blocked state will auto-clear after {blocked_expire}s.")
-        except ValueError:
-            pass
+    waiting_colors, active_colors, blocked_colors, transparency_config, blocked_enabled, blocked_expire, pause_colors, pause_timeout = result
 
     # Build and save config
     active_is_clone = active_colors.get("bg") == waiting_colors.get("bg")
@@ -270,6 +254,20 @@ def cmd_edit() -> None:
         wc = config.get("waiting_colors", {})
         return srgb_to_hsl(*hex_to_srgb(wc.get("bg", "#FAFAFA")))[2] < 0.5
 
+    def _remove_transparency():
+        config.pop("transparency", None)
+        if config.get("active_is_clone"):
+            wc2     = config.get("waiting_colors", {})
+            fg_t    = hex_to_srgb(wc2.get("fg",    "#101010"))
+            selbg_t = hex_to_srgb(wc2.get("selbg", "#B3D7FF"))
+            pal     = derive_palette(hex_to_srgb(wc2.get("bg", "#FAFAFA")))
+            auto_ac = derive_state_colors(pal["B"]["active"], fg_t, selbg_t)
+            config["active_colors"]              = auto_ac
+            config.get("palette", {})["active"]  = auto_ac["bg"]
+            config.pop("active_is_clone", None)
+            print(f"  Clone-waiting mode off — auto-derived active: {auto_ac['bg']}")
+        print("  Transparency off.")
+
     from lib.tui import banner, swatches, BOLD, DIM, RESET
 
     while True:
@@ -286,28 +284,28 @@ def cmd_edit() -> None:
         tr_str  = f"{tr.get('active', 0):.0%} while processing" if tr else "off"
         exp_str = f"{exp}s" if exp else "off"
         be_str  = "on" if be else f"{DIM}off{RESET}"
-        ac_str  = f"(clone waiting, transparency only)" if is_clone else ac.get("bg", "—")
+        ac_str  = "(clone waiting, transparency only)" if is_clone else ac.get("bg", "—")
         pc_str  = pc["bg"] if pc else f"{DIM}off{RESET}"
         pto_str = f"{pto}s" if pc else f"{DIM}—{RESET}"
 
+        w_sw = swatches(wc) if wc else "                "
         a_sw = swatches(ac) if ac else "                "
         b_sw = swatches(bc) if bc else "                "
         p_sw = swatches(pc) if pc else "                "
 
         banner(
-            waiting_hex  = wc.get("bg") if wc else None,
-            active_hex   = ac.get("bg") if ac else None,
-            blocked_hex  = bc.get("bg") if bc else None,
-            subtitle     = "edit",
+            waiting_hex = wc.get("bg") if wc else None,
+            active_hex  = ac.get("bg") if ac else None,
+            blocked_hex = bc.get("bg") if bc else None,
+            subtitle    = "edit",
         )
-        # Shortcuts: p=Processing, b=Blocked, t=Transparency (toggle/auto/pause
-        # start with conflicting letters so kept as number-only).
-        print(f"  {DIM}1{RESET}  {BOLD}[p]{RESET}rocessing   {a_sw}  {DIM}{ac_str}{RESET}")
+        print(f"  {DIM}0{RESET}  {BOLD}[n]{RESET}ormal        {w_sw}  {DIM}{wc.get('bg', '—')}{RESET}")
+        print(f"  {DIM}1{RESET}  {BOLD}[p]{RESET}rocessing    {a_sw}  {DIM}{ac_str}{RESET}")
         print(f"  {DIM}2{RESET}  {BOLD}[b]{RESET}locked       {b_sw}  {DIM}{bc.get('bg', '—')}{RESET}  ·  {be_str}")
-        print(f"  {DIM}3{RESET}     toggle blocked       {DIM}currently {be_str}{RESET}")
+        print(f"  {DIM}3{RESET}  {BOLD}[o]{RESET}n/off        {DIM}toggle blocked indicator{RESET}")
         print(f"  {DIM}4{RESET}  {BOLD}[t]{RESET}ransparency  {DIM}{tr_str}{RESET}")
-        print(f"  {DIM}5{RESET}     auto-clear           {DIM}{exp_str}{RESET}")
-        print(f"  {DIM}6{RESET}     pause color    {p_sw}  {DIM}{pc_str}  ·  idle {pto_str}{RESET}")
+        print(f"  {DIM}5{RESET}  {BOLD}[e]{RESET}xpire        {DIM}auto-clear blocked  ·  {exp_str}{RESET}")
+        print(f"  {DIM}6{RESET}  {BOLD}[i]{RESET}dle          {p_sw}  {DIM}{pc_str}  ·  {pto_str}{RESET}")
         print()
         print(f"     {BOLD}[a]{RESET}pply and save")
         print(f"     {BOLD}[q]{RESET}uit without saving")
@@ -319,10 +317,26 @@ def cmd_edit() -> None:
             print()
             return
 
-        if raw in ("q",):
+        if raw == "q":
             return
 
-        if raw in ("1", "p"):
+        if raw in ("0", "n"):
+            sc, fav = _get_schemes()
+            picked = pick_state_color(
+                "Normal", sc, fav, wc, _dark(),
+                phase_slot="active", other_colors=None,
+            )
+            if picked:
+                config["waiting_colors"]      = picked
+                config["palette"]["waiting"]  = picked["bg"]
+                config["fg"]    = picked["fg"]
+                config["selbg"] = picked["selbg"]
+                config["selfg"] = picked["selfg"]
+                if config.get("active_is_clone"):
+                    config["active_colors"]     = dict(picked)
+                    config["palette"]["active"] = picked["bg"]
+
+        elif raw in ("1", "p"):
             sc, fav = _get_schemes()
             picked = pick_state_color(
                 "Processing", sc, fav, wc, _dark(), hint="blue [6]",
@@ -331,8 +345,7 @@ def cmd_edit() -> None:
             if picked:
                 config["active_colors"]     = picked
                 config["palette"]["active"] = picked["bg"]
-                is_clone_now = picked.get("bg") == wc.get("bg")
-                if is_clone_now:
+                if picked.get("bg") == wc.get("bg"):
                     config["active_is_clone"] = True
                     print(f"  {DIM}Clone waiting — transparency will be the only signal.{RESET}\n")
                 else:
@@ -349,32 +362,32 @@ def cmd_edit() -> None:
                 config["palette"]["blocked"] = picked["bg"]
                 config["blocked_enabled"]    = True
 
-        elif raw in ("3",):
+        elif raw in ("3", "o"):
             be = not be
             config["blocked_enabled"] = be
             print(f"  Blocked indicator {'enabled' if be else 'disabled'}.")
 
         elif raw in ("4", "t"):
-            tr_new = _pick_transparency(query_terminal_transparency)
-            if tr_new:
-                config["transparency"] = tr_new
+            if tr:
+                cur = tr.get("active", 0)
+                print(f"\n  Currently: {cur:.0%} while processing\n")
+                print(f"  {BOLD}[a]{RESET}djust   {BOLD}[o]{RESET}ff   Enter = keep\n")
+                try:
+                    sub = input("  > ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    sub = ""
+                if sub == "a":
+                    tr_new = _pick_transparency(query_terminal_transparency)
+                    if tr_new:
+                        config["transparency"] = tr_new
+                elif sub == "o":
+                    _remove_transparency()
             else:
-                config.pop("transparency", None)
-                # Clone-waiting mode depends on transparency as the only signal.
-                # With transparency gone, auto-derive a real active color.
-                if config.get("active_is_clone"):
-                    wc2 = config.get("waiting_colors", {})
-                    fg_t    = hex_to_srgb(wc2.get("fg", "#101010"))
-                    selbg_t = hex_to_srgb(wc2.get("selbg", "#B3D7FF"))
-                    pal = derive_palette(hex_to_srgb(wc2.get("bg", "#FAFAFA")))
-                    auto_ac = derive_state_colors(pal["B"]["active"], fg_t, selbg_t)
-                    config["active_colors"]     = auto_ac
-                    config.get("palette", {})["active"] = auto_ac["bg"]
-                    config.pop("active_is_clone", None)
-                    print(f"  Clone-waiting mode off — auto-derived active: {auto_ac['bg']}")
-                print("  Transparency off.")
+                tr_new = _pick_transparency(query_terminal_transparency)
+                if tr_new:
+                    config["transparency"] = tr_new
 
-        elif raw in ("5",):
+        elif raw in ("5", "e"):
             try:
                 v = input("  Seconds before auto-clear (0 = off): ").strip()
                 n = int(v)
@@ -388,36 +401,52 @@ def cmd_edit() -> None:
             except (ValueError, EOFError, KeyboardInterrupt):
                 pass
 
-        elif raw == "6":
-            # Pause / idle color
+        elif raw in ("6", "i"):
             sc, fav = _get_schemes()
-            print()
-            print("  Pause color: shown when the session is idle for a while,")
-            print("  or manually via  mondrian pause  (or ask Claude to pause).")
-            print()
-            picked = pick_state_color(
-                "Pause", sc, fav, wc, _dark(), hint="dark/dim [9]",
-                phase_slot="active", other_colors=None,
-            )
-            if picked:
-                config["pause_colors"] = picked
+            if pc:
+                print(f"\n  Current pause  {pc['bg']}  ·  idle {pto}s\n")
+                print(f"  {BOLD}[r]{RESET}e-pick   {BOLD}[t]{RESET}imeout   {BOLD}[d]{RESET}elete   Enter = keep\n")
                 try:
-                    v = input(f"  Idle timeout in seconds [3600]: ").strip()
-                    n = int(v) if v else 3600
-                    config["pause_timeout"] = max(60, n)
-                except (ValueError, EOFError, KeyboardInterrupt):
-                    config["pause_timeout"] = 3600
-                print(f"  Pause after {config['pause_timeout']}s of inactivity.")
-            else:
-                if pc:
+                    sub = input("  > ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    sub = ""
+                if sub == "r":
+                    picked = pick_state_color(
+                        "Pause", sc, fav, wc, _dark(), hint="dark/dim [9]",
+                        phase_slot="active", other_colors=None,
+                    )
+                    if picked:
+                        config["pause_colors"] = picked
+                        print(f"  Pause color updated.")
+                elif sub == "t":
                     try:
-                        off = input("  Remove pause color? [y/N]: ").strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        off = ""
-                    if off == "y":
-                        config.pop("pause_colors", None)
-                        config.pop("pause_timeout", None)
-                        print("  Pause color removed.")
+                        v = input(f"  Idle timeout in seconds [{pto}]: ").strip()
+                        n = int(v) if v else pto
+                        config["pause_timeout"] = max(60, n)
+                        print(f"  Timeout set to {config['pause_timeout']}s.")
+                    except (ValueError, EOFError, KeyboardInterrupt):
+                        pass
+                elif sub == "d":
+                    config.pop("pause_colors",  None)
+                    config.pop("pause_timeout", None)
+                    print("  Pause color removed.")
+            else:
+                print()
+                print("  Pause color: shown when idle for a while, or via  mondrian pause.")
+                print()
+                picked = pick_state_color(
+                    "Pause", sc, fav, wc, _dark(), hint="dark/dim [9]",
+                    phase_slot="active", other_colors=None,
+                )
+                if picked:
+                    config["pause_colors"] = picked
+                    try:
+                        v = input("  Idle timeout in seconds [3600]: ").strip()
+                        n = int(v) if v else 3600
+                        config["pause_timeout"] = max(60, n)
+                    except (ValueError, EOFError, KeyboardInterrupt):
+                        config["pause_timeout"] = 3600
+                    print(f"  Pause after {config['pause_timeout']}s of inactivity.")
 
         elif raw == "a":
             _save_config(config)

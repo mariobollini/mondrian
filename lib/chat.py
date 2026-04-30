@@ -172,6 +172,7 @@ def configure_phases(profile: dict) -> "tuple | None":
         raw = ""
     blocked_enabled = raw != "n"
 
+    blocked_expire = 0
     if blocked_enabled:
         blocked_colors = pick_state_color(
             "Blocked", schemes, favorites, waiting_colors, dark_mode,
@@ -181,6 +182,14 @@ def configure_phases(profile: dict) -> "tuple | None":
         if blocked_colors is None:
             blocked_colors = auto_blocked(waiting_colors)
             print(f"  {DIM}Auto-derived  →{RESET}  {blocked_colors['bg']}\n")
+
+        try:
+            raw_exp = input("  Auto-clear after N seconds? [e.g. 90, or Enter to skip]: ").strip()
+            if raw_exp:
+                blocked_expire = max(10, int(raw_exp))
+                print(f"  {DIM}Will auto-clear after {blocked_expire}s.{RESET}\n")
+        except (ValueError, EOFError, KeyboardInterrupt):
+            pass
     else:
         blocked_colors = dict(waiting_colors)
         print(f"  {DIM}Blocked indicator disabled.{RESET}\n")
@@ -227,13 +236,15 @@ def configure_phases(profile: dict) -> "tuple | None":
 
     # ── Review + confirm ─────────────────────────────────────────────────
     if not print_review_and_confirm(
-        waiting_colors, active_colors, blocked_colors, transparency_config
+        waiting_colors, active_colors, blocked_colors, transparency_config,
+        blocked_enabled=blocked_enabled, blocked_expire=blocked_expire,
+        pause_colors=pause_colors, pause_timeout=pause_timeout,
     ):
         print("  Cancelled.\n")
         return None
 
     return (
         waiting_colors, active_colors, blocked_colors,
-        transparency_config, blocked_enabled,
+        transparency_config, blocked_enabled, blocked_expire,
         pause_colors, pause_timeout,
     )
